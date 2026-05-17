@@ -3,7 +3,6 @@ use std::collections::HashMap;
 use ggez::event::{self, EventHandler};
 use ggez::graphics::{self, Color, DrawParam, Mesh, MeshBuilder};
 use ggez::{Context, ContextBuilder, GameResult};
-use tiny_skia::Size;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum PieceColor {
@@ -22,28 +21,41 @@ enum PieceType {
 #[derive(Clone, Copy)]
 struct Piece {
     color: PieceColor,
-    kind: PieceType
+    kind: PieceType,
 }
 type Board = [[Option<Piece>; 8]; 8];
 
-fn inital_board() -> Board{
+fn inital_board() -> Board {
     use PieceColor::*;
     use PieceType::*;
 
     let back_row = [Rook, Knight, Bishop, Queen, King, Bishop, Knight, Rook];
     let mut board: Board = [[None; 8]; 8];
     for i in 0..8 {
-        board[0][i] = Some(Piece { color: Black, kind: back_row[i] });
-        board[1][i] = Some(Piece { color: Black, kind: Pawn });
-        board[6][i] = Some(Piece { color: White, kind: Pawn });
-        board[7][i] = Some(Piece { color: White, kind: back_row[i] });
+        board[0][i] = Some(Piece {
+            color: Black,
+            kind: back_row[i],
+        });
+        board[1][i] = Some(Piece {
+            color: Black,
+            kind: Pawn,
+        });
+        board[6][i] = Some(Piece {
+            color: White,
+            kind: Pawn,
+        });
+        board[7][i] = Some(Piece {
+            color: White,
+            kind: back_row[i],
+        });
     }
     board
 }
 
 fn load_svg_as_image(ctx: &mut Context, path: &str, size: u32) -> GameResult<graphics::Image> {
-    let svg_data = std::fs::read(path)
-        .map_err(|e| ggez::GameError::ResourceLoadError(format!("Failed to read SVG file: {}", e)))?;
+    let svg_data = std::fs::read(path).map_err(|e| {
+        ggez::GameError::ResourceLoadError(format!("Failed to read SVG file: {}", e))
+    })?;
     let options = resvg::usvg::Options::default();
     let tree = resvg::usvg::Tree::from_data(&svg_data, &options)
         .map_err(|e| ggez::GameError::ResourceLoadError(format!("Failed to parse SVG: {}", e)))?;
@@ -53,7 +65,7 @@ fn load_svg_as_image(ctx: &mut Context, path: &str, size: u32) -> GameResult<gra
     let scale_y = size as f32 / tree.size().height();
     let transform = tiny_skia::Transform::from_scale(scale_x, scale_y);
     resvg::render(&tree, transform, &mut pixmap.as_mut());
-    
+
     Ok(graphics::Image::from_pixels(
         ctx,
         pixmap.data(),
@@ -63,12 +75,15 @@ fn load_svg_as_image(ctx: &mut Context, path: &str, size: u32) -> GameResult<gra
     ))
 }
 
-fn load_pieces(ctx: &mut Context, square_size: u32) -> GameResult<HashMap<(u8, u8), graphics::Image>>{
+fn load_pieces(
+    ctx: &mut Context,
+    square_size: u32,
+) -> GameResult<HashMap<(u8, u8), graphics::Image>> {
     use PieceColor::*;
     use PieceType::*;
     // Maps (color_id, kind_id) → file prefix
-       // color: 0 = White, 1 = Black
-       // kind:  0=P, 1=R, 2=N, 3=B, 4=Q, 5=K
+    // color: 0 = White, 1 = Black
+    // kind:  0=P, 1=R, 2=N, 3=B, 4=Q, 5=K
     let pieces = [
         (White, Pawn, "wP"),
         (White, Rook, "wR"),
@@ -84,7 +99,7 @@ fn load_pieces(ctx: &mut Context, square_size: u32) -> GameResult<HashMap<(u8, u
         (Black, King, "bK"),
     ];
     let mut map = HashMap::new();
-    for (color, kind, prefix) in &pieces{
+    for (color, kind, prefix) in &pieces {
         let path = format!("pieces/{}.svg", prefix);
         let image = load_svg_as_image(ctx, &path, square_size)?;
         let key = (*color as u8, *kind as u8);
@@ -110,13 +125,18 @@ struct MyGame {
 }
 impl MyGame {
     pub fn new(ctx: &mut Context) -> GameResult<Self> {
-        let(win_w, win_h) = ctx.gfx.drawable_size();
+        let (win_w, win_h) = ctx.gfx.drawable_size();
         let square_size = win_w.min(win_h) / 8.0;
-        
+
         let board_mesh = create_chessboard(ctx)?;
         let board = inital_board();
         let pieces = load_pieces(ctx, square_size as u32)?;
-        Ok(MyGame { board_mesh, board, pieces, square_size })
+        Ok(MyGame {
+            board_mesh,
+            board,
+            pieces,
+            square_size,
+        })
     }
 }
 impl EventHandler for MyGame {
