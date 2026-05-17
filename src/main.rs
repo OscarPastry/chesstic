@@ -4,6 +4,7 @@ use ggez::{Context, ContextBuilder, GameResult};
 fn main() {
     let (mut ctx, event_loop) = ContextBuilder::new("Chesstic", "OscarPastry")
         .window_setup(ggez::conf::WindowSetup::default().title("Chesstic"))
+        .window_mode(ggez::conf::WindowMode::default().dimensions(800.0, 800.0))
         .build()
         .expect("Failed to create context");
     let my_game = MyGame::new(&mut ctx).expect("Failed to create game");
