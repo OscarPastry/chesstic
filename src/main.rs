@@ -86,7 +86,13 @@ fn slide(
     moves
 }
 
-fn get_pseudo_moves(board: &Board, row: usize, col: usize) -> Vec<(usize, usize)> {
+fn get_pseudo_moves(
+    board: &Board,
+    row: usize,
+    col: usize,
+    en_passant_target: Option<(usize, usize)>,
+    castling_rights: CastlingRights,
+) -> Vec<(usize, usize)> {
     let piece = match board[row][col] {
         Some(p) => p,
         None => return Vec::new(),
@@ -120,6 +126,9 @@ fn get_pseudo_moves(board: &Board, row: usize, col: usize) -> Vec<(usize, usize)
                             if t.color != color {
                                 moves.push((nr, nc as usize));
                             }
+                        }
+                        if en_passant_target == Some((nr, nc as usize)) {
+                            moves.push((nr, nc as usize)); // En passant capture
                         }
                     }
                 }
@@ -194,9 +203,54 @@ fn get_pseudo_moves(board: &Board, row: usize, col: usize) -> Vec<(usize, usize)
                     }
                 }
             }
+            let enemy_color = color.opposite();
+            let king_row = if color == PieceColor::White { 7 } else { 0 };
+            // King must be on its original square and not currently in check
+            if row == king_row && col == 4 && !is_attacked(board, row, col, enemy_color) {
+                // Kingside castling
+                if (color == PieceColor::White && castling_rights.white_kingside)
+                    || (color == PieceColor::Black && castling_rights.black_kingside)
+                {
+                    if board[king_row][5].is_none()
+                        && board[king_row][6].is_none()
+                        && !is_attacked(board, king_row, 5, enemy_color)
+                        && !is_attacked(board, king_row, 6, enemy_color)
+                    {
+                        moves.push((king_row, 6));
+                    }
+                }
+                // Queenside castling
+                if (color == PieceColor::White && castling_rights.white_queenside)
+                    || (color == PieceColor::Black && castling_rights.black_queenside)
+                {
+                    if board[king_row][3].is_none()
+                        && board[king_row][2].is_none()
+                        && board[king_row][1].is_none()
+                        && !is_attacked(board, king_row, 3, enemy_color)
+                        && !is_attacked(board, king_row, 2, enemy_color)
+                    {
+                        moves.push((king_row, 2));
+                    }
+                }
+            }
         }
     }
     moves
+}
+fn is_attacked(board: &Board, row: usize, col: usize, by_color: PieceColor) -> bool {
+    for r in 0..8 {
+        for c in 0..8 {
+            if let Some(p) = board[r][c] {
+                if p.color == by_color
+                    && get_pseudo_moves(board, r, c, None, CastlingRights::none())
+                        .contains(&(row, col))
+                {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 fn is_in_check(board: &Board, color: PieceColor) -> bool {
     let mut king = (0usize, 0usize);
@@ -229,7 +283,7 @@ fn get_legal_moves(board: &Board, row: usize, col: usize) -> Vec<(usize, usize)>
         Some(p) => p.color,
         None => return Vec::new(),
     };
-    get_pseudo_moves(board, row, col)
+    get_pseudo_moves(board, row, col, None, CastlingRights::new())
         .into_iter()
         .filter(|&(nr, nc)| {
             let mut temp_board = *board;
@@ -306,6 +360,32 @@ fn main() {
     let my_game = MyGame::new(&mut ctx).expect("Failed to create game");
     event::run(ctx, event_loop, my_game);
 }
+#[derive(Clone, Copy)]
+struct CastlingRights {
+    white_kingside: bool,
+    white_queenside: bool,
+    black_kingside: bool,
+    black_queenside: bool,
+}
+impl CastlingRights {
+    fn new() -> Self {
+        CastlingRights {
+            white_kingside: true,
+            white_queenside: true,
+            black_kingside: true,
+            black_queenside: true,
+        }
+    }
+    fn none() -> Self {
+        CastlingRights {
+            white_kingside: false,
+            white_queenside: false,
+            black_kingside: false,
+            black_queenside: false,
+        }
+    }
+}
+
 struct MyGame {
     board_mesh: Mesh,
     board: Board,
@@ -315,6 +395,8 @@ struct MyGame {
     turn: PieceColor,
     legal_moves: Vec<(usize, usize)>,
     flash_timer: f32,
+    en_passant_target: Option<(usize, usize)>,
+    castling_rights: [(bool, bool); 2], // [(white_kingside, white_queenside), (black_kingside, black_queenside)]
 }
 impl MyGame {
     pub fn new(ctx: &mut Context) -> GameResult<Self> {
@@ -333,6 +415,8 @@ impl MyGame {
             turn: PieceColor::White,
             legal_moves: Vec::new(),
             flash_timer: 0.0,
+            en_passant_target: None,
+            castling_rights: [(true, true), (true, true)],
         })
     }
 }
