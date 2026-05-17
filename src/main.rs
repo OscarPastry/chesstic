@@ -31,7 +31,6 @@ impl EventHandler for MyGame {
 }
 fn create_chessboard(ctx: &mut Context) -> GameResult<Mesh> {
     let (win_w, win_h) = ctx.gfx.drawable_size();
-    println!("Window size: {}x{}", win_w, win_h);
     let square_size = win_w.min(win_h) / 8.0; // Ensure squares fit within the window
     let board_size = 8;
     let mut mesh_builder = MeshBuilder::new();
@@ -42,9 +41,9 @@ fn create_chessboard(ctx: &mut Context) -> GameResult<Mesh> {
             // Alternate between white and dark squares
             let is_dark = (row + col) % 2 == 1;
             let color = if is_dark {
-                Color::new(0.2, 0.2, 0.2, 1.0) // Dark
+                Color::new(0.451, 0.584, 0.322, 1.0) // Dark
             } else {
-                Color::new(0.9, 0.9, 0.9, 1.0) // Light
+                Color::new(0.922, 0.925, 0.816, 1.0) // Light
             };
             // Draw a rectangle for each square
             mesh_builder.rectangle(

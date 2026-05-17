@@ -5,3 +5,5 @@ edition = "2024"
 
 [dependencies]
 ggez = "0.9.3"
+resvg = "0.42"
+tiny-skia = "0.11"
