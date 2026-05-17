@@ -1,8 +1,7 @@
-use std::collections::HashMap;
-
 use ggez::event::{self, EventHandler};
 use ggez::graphics::{self, Color, DrawParam, Mesh, MeshBuilder};
 use ggez::{Context, ContextBuilder, GameResult};
+use std::collections::HashMap;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum PieceColor {
@@ -50,6 +49,188 @@ fn inital_board() -> Board {
         });
     }
     board
+}
+
+fn slide(
+    board: &Board,
+    row: usize,
+    col: usize,
+    color: PieceColor,
+    dir: &[(i32, i32)],
+) -> Vec<(usize, usize)> {
+    let mut moves = Vec::new();
+    for (dr, dc) in dir {
+        let mut r = row as i32 + dr;
+        let mut c = col as i32 + dc;
+        while r >= 0 && r < 8 && c >= 0 && c < 8 {
+            match board[r as usize][c as usize] {
+                Some(p) if p.color == color => break, // Blocked by own piece
+                Some(_) => {
+                    moves.push((r as usize, c as usize)); // Capture opponent piece
+                    break;
+                }
+                None => moves.push((r as usize, c as usize)), // Empty square
+            }
+            r += dr;
+            c += dc;
+        }
+    }
+    moves
+}
+
+fn get_pseudo_moves(board: &Board, row: usize, col: usize) -> Vec<(usize, usize)> {
+    let piece = match board[row][col] {
+        Some(p) => p,
+        None => return Vec::new(),
+    };
+    let color = piece.color;
+    let mut moves = Vec::new();
+
+    // nr = next row, nc = next col
+    match piece.kind {
+        PieceType::Pawn => {
+            let dir: i32 = if color == PieceColor::White { -1 } else { 1 };
+            let startrow = if color == PieceColor::White { 6 } else { 1 };
+            // Forward move
+            let forward_row = row as i32 + dir;
+            if forward_row >= 0 && forward_row < 8 {
+                let nr = forward_row as usize; // Check forward move
+                if board[nr][col].is_none() {
+                    moves.push((nr, col));
+                    if row == startrow {
+                        // Check double move from starting position
+                        let nr2 = (row as i32 + dir * 2) as usize;
+                        if board[nr2][col].is_none() {
+                            moves.push((nr2, col));
+                        }
+                    }
+                    for dc in [-1i32, 1] {
+                        let nc = col as i32 + dc; // Check captures
+                        if nc >= 0 && nc < 8 {
+                            if let Some(t) = board[nr][nc as usize] {
+                                if t.color != color {
+                                    moves.push((nr, nc as usize));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        PieceType::Knight => {
+            for (dr, dc) in [
+                (-2, -1i32),
+                (-2, 1),
+                (-1, 2),
+                (-1, -2),
+                (1, 2),
+                (1, -2),
+                (2, 1),
+                (2, -1),
+            ] {
+                let (r, c) = (row as i32 + dr, col as i32 + dc);
+                if r >= 0 && r < 8 && c >= 0 && c < 8 {
+                    if board[r as usize][c as usize].map_or(true, |p| p.color != color) {
+                        moves.push((r as usize, c as usize));
+                    }
+                }
+            }
+        }
+        PieceType::Bishop => {
+            moves.extend(slide(
+                board,
+                row,
+                col,
+                color,
+                &[(-1, -1), (-1, 1), (1, -1), (1, 1)],
+            ));
+        }
+        PieceType::Rook => {
+            moves.extend(slide(
+                board,
+                row,
+                col,
+                color,
+                &[(-1, 0), (1, 0), (0, -1), (0, 1)],
+            ));
+        }
+        PieceType::Queen => {
+            moves.extend(slide(
+                board,
+                row,
+                col,
+                color,
+                &[
+                    (-1, -1),
+                    (-1, 1),
+                    (1, -1),
+                    (1, 1),
+                    (-1, 0),
+                    (1, 0),
+                    (0, -1),
+                    (0, 1),
+                ],
+            ));
+        }
+        PieceType::King => {
+            for dr in -1i32..=1 {
+                for dc in -1i32..=1 {
+                    if dr == 0 && dc == 0 {
+                        continue;
+                    }
+                    let (r, c) = (row as i32 + dr, col as i32 + dc);
+                    if r >= 0 && r < 8 && c >= 0 && c < 8 {
+                        if board[r as usize][c as usize].map_or(true, |p| p.color != color) {
+                            moves.push((r as usize, c as usize));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    moves
+}
+fn is_in_check(board: &Board, color: PieceColor) -> bool {
+    let mut king = (0usize, 0usize);
+    //find the king
+    'find: for r in 0..8 {
+        for c in 0..8 {
+            if let Some(p) = board[r][c] {
+                if p.color == color && p.kind == PieceType::King {
+                    king = (r, c);
+                    break 'find;
+                }
+            }
+        }
+    }
+    //check if any opponent piece can move to the king's position
+    for r in 0..8 {
+        for c in 0..8 {
+            if let Some(p) = board[r][c] {
+                if p.color != color && get_pseudo_moves(board, r, c).contains(&king) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+fn get_legal_moves(board: &Board, row: usize, col: usize) -> Vec<(usize, usize)> {
+    let color = match board[row][col] {
+        Some(p) => p.color,
+        None => return Vec::new(),
+    };
+    get_pseudo_moves(board, row, col)
+        .into_iter()
+        .filter(|&(nr, nc)| {
+            let mut temp_board = *board;
+            temp_board[nr][nc] = temp_board[row][col];
+            temp_board[row][col] = None;
+            //Keep the moves only if King is not in check after it
+            !is_in_check(&temp_board, color)
+        })
+        .collect()
 }
 
 fn load_svg_as_image(ctx: &mut Context, path: &str, size: u32) -> GameResult<graphics::Image> {
