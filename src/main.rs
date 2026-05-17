@@ -8,6 +8,14 @@ enum PieceColor {
     White,
     Black,
 }
+impl PieceColor {
+    fn opposite(self) -> Self {
+        match self {
+            PieceColor::White => PieceColor::Black,
+            PieceColor::Black => PieceColor::White,
+        }
+    }
+}
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum PieceType {
     Pawn,
@@ -104,13 +112,13 @@ fn get_pseudo_moves(board: &Board, row: usize, col: usize) -> Vec<(usize, usize)
                             moves.push((nr2, col));
                         }
                     }
-                    for dc in [-1i32, 1] {
-                        let nc = col as i32 + dc; // Check captures
-                        if nc >= 0 && nc < 8 {
-                            if let Some(t) = board[nr][nc as usize] {
-                                if t.color != color {
-                                    moves.push((nr, nc as usize));
-                                }
+                }
+                for dc in [-1i32, 1] {
+                    let nc = col as i32 + dc; // Check captures
+                    if nc >= 0 && nc < 8 {
+                        if let Some(t) = board[nr][nc as usize] {
+                            if t.color != color {
+                                moves.push((nr, nc as usize));
                             }
                         }
                     }
@@ -304,6 +312,9 @@ struct MyGame {
     pieces: HashMap<(u8, u8), graphics::Image>,
     square_size: f32,
     selected_piece: Option<(usize, usize)>,
+    turn: PieceColor,
+    legal_moves: Vec<(usize, usize)>,
+    flash_timer: f32,
 }
 impl MyGame {
     pub fn new(ctx: &mut Context) -> GameResult<Self> {
@@ -319,6 +330,9 @@ impl MyGame {
             pieces,
             square_size,
             selected_piece: None,
+            turn: PieceColor::White,
+            legal_moves: Vec::new(),
+            flash_timer: 0.0,
         })
     }
 }
@@ -330,7 +344,7 @@ impl EventHandler for MyGame {
         x: f32,
         y: f32,
     ) -> GameResult {
-        if button != event::MouseButton::Left {
+        if button != event::MouseButton::Left || self.flash_timer > 0.0 {
             return Ok(());
         }
         let col = (x / self.square_size) as usize;
@@ -343,24 +357,51 @@ impl EventHandler for MyGame {
             Some((sel_row, sel_col)) => {
                 if sel_row == row && sel_col == col {
                     self.selected_piece = None; // Deselect if clicked again
-                } else {
+                    self.legal_moves.clear();
+                } else if self.legal_moves.contains(&(row, col)) {
                     // Attempt to move piece
                     if let Some(piece) = self.board[sel_row][sel_col] {
                         self.board[row][col] = Some(piece);
                         self.board[sel_row][sel_col] = None;
+                        self.turn = self.turn.opposite(); // Switch turns
+                        self.selected_piece = None;
+                        self.legal_moves.clear();
                     }
-                    self.selected_piece = None; // Deselect after move
+                } else if let Some(piece) = self.board[row][col] {
+                    if piece.color == self.turn {
+                        self.selected_piece = Some((row, col)); // Select new piece
+                        self.legal_moves = get_legal_moves(&self.board, row, col);
+                    } else {
+                        self.flash_timer = 0.001; // Start flash effect for invalid move
+                        self.selected_piece = None; // Deselect current piece
+                        self.legal_moves.clear();
+                    }
+                } else {
+                    self.selected_piece = None; // Deselect if clicked empty square
+                    self.legal_moves.clear();
                 }
             }
             None => {
-                if self.board[row][col].is_some() {
-                    self.selected_piece = Some((row, col)); // Select piece
+                if let Some(p) = self.board[row][col] {
+                    // Select piece
+                    if p.color == self.turn {
+                        self.selected_piece = Some((row, col));
+                        self.legal_moves = get_legal_moves(&self.board, row, col);
+                    } else {
+                        self.flash_timer = 0.001; // Start flash effect for invalid selection
+                    }
                 }
             }
         }
         Ok(())
     }
     fn update(&mut self, _ctx: &mut Context) -> GameResult {
+        if self.flash_timer > 0.0 {
+            self.flash_timer += _ctx.time.delta().as_secs_f32();
+            if self.flash_timer > 1.0 {
+                self.flash_timer = 0.0; // Reset flash after 1 second
+            }
+        }
         Ok(())
     }
     fn draw(&mut self, ctx: &mut Context) -> GameResult {
@@ -378,7 +419,37 @@ impl EventHandler for MyGame {
             )?;
             canvas.draw(&highlight, DrawParam::default());
         }
-
+        for &(mr, mc) in &self.legal_moves {
+            let dot = Mesh::new_circle(
+                ctx,
+                graphics::DrawMode::fill(),
+                [
+                    mc as f32 * self.square_size + self.square_size / 2.0,
+                    mr as f32 * self.square_size + self.square_size / 2.0,
+                ],
+                self.square_size * 0.15,
+                0.5,
+                Color::new(0.0, 0.0, 0.0, 0.3),
+            )?;
+            canvas.draw(&dot, DrawParam::default());
+        }
+        if self.flash_timer > 0.0 {
+            let phase = (self.flash_timer / 0.25) as u32; // Flash frequency
+            if phase % 2 == 0 {
+                let flash = Mesh::new_rectangle(
+                    ctx,
+                    graphics::DrawMode::stroke(10.0),
+                    graphics::Rect::new(
+                        0.0,
+                        0.0,
+                        ctx.gfx.drawable_size().0 as f32,
+                        ctx.gfx.drawable_size().1 as f32,
+                    ),
+                    Color::new(1.0, 0.0, 0.0, 1.0),
+                )?;
+                canvas.draw(&flash, DrawParam::default());
+            }
+        }
         for row in 0..8usize {
             for col in 0..8usize {
                 if let Some(piece) = self.board[row][col] {
