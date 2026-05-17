@@ -122,6 +122,7 @@ struct MyGame {
     board: Board,
     pieces: HashMap<(u8, u8), graphics::Image>,
     square_size: f32,
+    selected_piece: Option<(usize, usize)>,
 }
 impl MyGame {
     pub fn new(ctx: &mut Context) -> GameResult<Self> {
@@ -136,16 +137,67 @@ impl MyGame {
             board,
             pieces,
             square_size,
+            selected_piece: None,
         })
     }
 }
 impl EventHandler for MyGame {
+    fn mouse_button_down_event(
+        &mut self,
+        _ctx: &mut Context,
+        button: ggez::event::MouseButton,
+        x: f32,
+        y: f32,
+    ) -> GameResult {
+        if button != event::MouseButton::Left {
+            return Ok(());
+        }
+        let col = (x / self.square_size) as usize;
+        let row = (y / self.square_size) as usize;
+
+        if col >= 8 || row >= 8 {
+            return Ok(());
+        }
+        match self.selected_piece {
+            Some((sel_row, sel_col)) => {
+                if sel_row == row && sel_col == col {
+                    self.selected_piece = None; // Deselect if clicked again
+                } else {
+                    // Attempt to move piece
+                    if let Some(piece) = self.board[sel_row][sel_col] {
+                        self.board[row][col] = Some(piece);
+                        self.board[sel_row][sel_col] = None;
+                    }
+                    self.selected_piece = None; // Deselect after move
+                }
+            }
+            None => {
+                if self.board[row][col].is_some() {
+                    self.selected_piece = Some((row, col)); // Select piece
+                }
+            }
+        }
+        Ok(())
+    }
     fn update(&mut self, _ctx: &mut Context) -> GameResult {
         Ok(())
     }
     fn draw(&mut self, ctx: &mut Context) -> GameResult {
         let mut canvas = graphics::Canvas::from_frame(ctx, Color::new(0.1, 0.1, 0.1, 1.0));
         canvas.draw(&self.board_mesh, DrawParam::default());
+
+        if let Some((sel_row, sel_col)) = self.selected_piece {
+            let x = sel_col as f32 * self.square_size;
+            let y = sel_row as f32 * self.square_size;
+            let highlight = Mesh::new_rectangle(
+                ctx,
+                graphics::DrawMode::fill(),
+                graphics::Rect::new(x, y, self.square_size, self.square_size),
+                Color::new(1.0, 1.0, 0.0, 0.4),
+            )?;
+            canvas.draw(&highlight, DrawParam::default());
+        }
+
         for row in 0..8usize {
             for col in 0..8usize {
                 if let Some(piece) = self.board[row][col] {
