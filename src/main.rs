@@ -205,12 +205,15 @@ fn get_pseudo_moves(
             }
             let enemy_color = color.opposite();
             let king_row = if color == PieceColor::White { 7 } else { 0 };
+            let can_kingside = (color == PieceColor::White && castling_rights.white_kingside)
+                || (color == PieceColor::Black && castling_rights.black_kingside);
+            let can_queenside = (color == PieceColor::White && castling_rights.white_queenside)
+                || (color == PieceColor::Black && castling_rights.black_queenside);
+
             // King must be on its original square and not currently in check
-            if row == king_row && col == 4 && !is_attacked(board, row, col, enemy_color) {
+            if (can_kingside || can_queenside) && row == king_row && col == 4 && !is_attacked(board, row, col, enemy_color) {
                 // Kingside castling
-                if (color == PieceColor::White && castling_rights.white_kingside)
-                    || (color == PieceColor::Black && castling_rights.black_kingside)
-                {
+                if can_kingside {
                     if board[king_row][5].is_none()
                         && board[king_row][6].is_none()
                         && !is_attacked(board, king_row, 5, enemy_color)
@@ -220,9 +223,7 @@ fn get_pseudo_moves(
                     }
                 }
                 // Queenside castling
-                if (color == PieceColor::White && castling_rights.white_queenside)
-                    || (color == PieceColor::Black && castling_rights.black_queenside)
-                {
+                if can_queenside {
                     if board[king_row][3].is_none()
                         && board[king_row][2].is_none()
                         && board[king_row][1].is_none()
@@ -269,7 +270,9 @@ fn is_in_check(board: &Board, color: PieceColor) -> bool {
     for r in 0..8 {
         for c in 0..8 {
             if let Some(p) = board[r][c] {
-                if p.color != color && get_pseudo_moves(board, r, c).contains(&king) {
+                if p.color != color
+                    && get_pseudo_moves(board, r, c, None, CastlingRights::none()).contains(&king)
+                {
                     return true;
                 }
             }
@@ -278,17 +281,31 @@ fn is_in_check(board: &Board, color: PieceColor) -> bool {
     false
 }
 
-fn get_legal_moves(board: &Board, row: usize, col: usize) -> Vec<(usize, usize)> {
+fn get_legal_moves(
+    board: &Board,
+    row: usize,
+    col: usize,
+    en_passant_target: Option<(usize, usize)>,
+    castling_rights: CastlingRights,
+) -> Vec<(usize, usize)> {
     let color = match board[row][col] {
         Some(p) => p.color,
         None => return Vec::new(),
     };
-    get_pseudo_moves(board, row, col, None, CastlingRights::new())
+    get_pseudo_moves(board, row, col, en_passant_target, castling_rights)
         .into_iter()
         .filter(|&(nr, nc)| {
             let mut temp_board = *board;
             temp_board[nr][nc] = temp_board[row][col];
             temp_board[row][col] = None;
+            
+            // If en passant capture, remove the captured pawn
+            if let Some(piece) = temp_board[nr][nc] {
+                if piece.kind == PieceType::Pawn && nc != col && board[nr][nc].is_none() {
+                    temp_board[row][nc] = None;
+                }
+            }
+
             //Keep the moves only if King is not in check after it
             !is_in_check(&temp_board, color)
         })
@@ -396,7 +413,7 @@ struct MyGame {
     legal_moves: Vec<(usize, usize)>,
     flash_timer: f32,
     en_passant_target: Option<(usize, usize)>,
-    castling_rights: [(bool, bool); 2], // [(white_kingside, white_queenside), (black_kingside, black_queenside)]
+    castling_rights: CastlingRights,
 }
 impl MyGame {
     pub fn new(ctx: &mut Context) -> GameResult<Self> {
@@ -416,7 +433,7 @@ impl MyGame {
             legal_moves: Vec::new(),
             flash_timer: 0.0,
             en_passant_target: None,
-            castling_rights: [(true, true), (true, true)],
+            castling_rights: CastlingRights::new(),
         })
     }
 }
@@ -445,8 +462,68 @@ impl EventHandler for MyGame {
                 } else if self.legal_moves.contains(&(row, col)) {
                     // Attempt to move piece
                     if let Some(piece) = self.board[sel_row][sel_col] {
+                        let mut next_en_passant_target = None;
+                        
+                        // Handle castling rook movement
+                        if piece.kind == PieceType::King && (sel_col as i32 - col as i32).abs() == 2 {
+                            if col == 6 {
+                                // Kingside
+                                self.board[sel_row][5] = self.board[sel_row][7];
+                                self.board[sel_row][7] = None;
+                            } else if col == 2 {
+                                // Queenside
+                                self.board[sel_row][3] = self.board[sel_row][0];
+                                self.board[sel_row][0] = None;
+                            }
+                        }
+
+                        // Handle en passant capture
+                        if piece.kind == PieceType::Pawn && sel_col != col && self.board[row][col].is_none() {
+                            // Pawn moved diagonally to an empty square - must be en passant
+                            self.board[sel_row][col] = None; // Remove captured pawn
+                        }
+
+                        // Set en passant target
+                        if piece.kind == PieceType::Pawn && (sel_row as i32 - row as i32).abs() == 2 {
+                            let ep_row = (sel_row + row) / 2;
+                            next_en_passant_target = Some((ep_row, col));
+                        }
+
+                        // Update castling rights
+                        if piece.kind == PieceType::King {
+                            if piece.color == PieceColor::White {
+                                self.castling_rights.white_kingside = false;
+                                self.castling_rights.white_queenside = false;
+                            } else {
+                                self.castling_rights.black_kingside = false;
+                                self.castling_rights.black_queenside = false;
+                            }
+                        }
+                        if piece.kind == PieceType::Rook {
+                            if piece.color == PieceColor::White {
+                                if sel_row == 7 && sel_col == 0 {
+                                    self.castling_rights.white_queenside = false;
+                                } else if sel_row == 7 && sel_col == 7 {
+                                    self.castling_rights.white_kingside = false;
+                                }
+                            } else {
+                                if sel_row == 0 && sel_col == 0 {
+                                    self.castling_rights.black_queenside = false;
+                                } else if sel_row == 0 && sel_col == 7 {
+                                    self.castling_rights.black_kingside = false;
+                                }
+                            }
+                        }
+                        // Also update castling rights if a rook is captured!
+                        if row == 7 && col == 0 { self.castling_rights.white_queenside = false; }
+                        if row == 7 && col == 7 { self.castling_rights.white_kingside = false; }
+                        if row == 0 && col == 0 { self.castling_rights.black_queenside = false; }
+                        if row == 0 && col == 7 { self.castling_rights.black_kingside = false; }
+
                         self.board[row][col] = Some(piece);
                         self.board[sel_row][sel_col] = None;
+                        
+                        self.en_passant_target = next_en_passant_target;
                         self.turn = self.turn.opposite(); // Switch turns
                         self.selected_piece = None;
                         self.legal_moves.clear();
@@ -454,7 +531,7 @@ impl EventHandler for MyGame {
                 } else if let Some(piece) = self.board[row][col] {
                     if piece.color == self.turn {
                         self.selected_piece = Some((row, col)); // Select new piece
-                        self.legal_moves = get_legal_moves(&self.board, row, col);
+                        self.legal_moves = get_legal_moves(&self.board, row, col, self.en_passant_target, self.castling_rights);
                     } else {
                         self.flash_timer = 0.001; // Start flash effect for invalid move
                         self.selected_piece = None; // Deselect current piece
@@ -470,7 +547,7 @@ impl EventHandler for MyGame {
                     // Select piece
                     if p.color == self.turn {
                         self.selected_piece = Some((row, col));
-                        self.legal_moves = get_legal_moves(&self.board, row, col);
+                        self.legal_moves = get_legal_moves(&self.board, row, col, self.en_passant_target, self.castling_rights);
                     } else {
                         self.flash_timer = 0.001; // Start flash effect for invalid selection
                     }
