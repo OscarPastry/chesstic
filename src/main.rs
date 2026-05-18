@@ -211,7 +211,11 @@ fn get_pseudo_moves(
                 || (color == PieceColor::Black && castling_rights.black_queenside);
 
             // King must be on its original square and not currently in check
-            if (can_kingside || can_queenside) && row == king_row && col == 4 && !is_attacked(board, row, col, enemy_color) {
+            if (can_kingside || can_queenside)
+                && row == king_row
+                && col == 4
+                && !is_attacked(board, row, col, enemy_color)
+            {
                 // Kingside castling
                 if can_kingside {
                     if board[king_row][5].is_none()
@@ -290,7 +294,7 @@ fn get_legal_moves(
 ) -> Vec<(usize, usize)> {
     let color = match board[row][col] {
         Some(p) => p.color,
-        None => return Vec::new(),
+        none => return Vec::new(),
     };
     get_pseudo_moves(board, row, col, en_passant_target, castling_rights)
         .into_iter()
@@ -298,7 +302,7 @@ fn get_legal_moves(
             let mut temp_board = *board;
             temp_board[nr][nc] = temp_board[row][col];
             temp_board[row][col] = None;
-            
+
             // If en passant capture, remove the captured pawn
             if let Some(piece) = temp_board[nr][nc] {
                 if piece.kind == PieceType::Pawn && nc != col && board[nr][nc].is_none() {
@@ -463,9 +467,10 @@ impl EventHandler for MyGame {
                     // Attempt to move piece
                     if let Some(piece) = self.board[sel_row][sel_col] {
                         let mut next_en_passant_target = None;
-                        
+
                         // Handle castling rook movement
-                        if piece.kind == PieceType::King && (sel_col as i32 - col as i32).abs() == 2 {
+                        if piece.kind == PieceType::King && (sel_col as i32 - col as i32).abs() == 2
+                        {
                             if col == 6 {
                                 // Kingside
                                 self.board[sel_row][5] = self.board[sel_row][7];
@@ -478,13 +483,17 @@ impl EventHandler for MyGame {
                         }
 
                         // Handle en passant capture
-                        if piece.kind == PieceType::Pawn && sel_col != col && self.board[row][col].is_none() {
+                        if piece.kind == PieceType::Pawn
+                            && sel_col != col
+                            && self.board[row][col].is_none()
+                        {
                             // Pawn moved diagonally to an empty square - must be en passant
                             self.board[sel_row][col] = None; // Remove captured pawn
                         }
 
                         // Set en passant target
-                        if piece.kind == PieceType::Pawn && (sel_row as i32 - row as i32).abs() == 2 {
+                        if piece.kind == PieceType::Pawn && (sel_row as i32 - row as i32).abs() == 2
+                        {
                             let ep_row = (sel_row + row) / 2;
                             next_en_passant_target = Some((ep_row, col));
                         }
@@ -515,14 +524,22 @@ impl EventHandler for MyGame {
                             }
                         }
                         // Also update castling rights if a rook is captured!
-                        if row == 7 && col == 0 { self.castling_rights.white_queenside = false; }
-                        if row == 7 && col == 7 { self.castling_rights.white_kingside = false; }
-                        if row == 0 && col == 0 { self.castling_rights.black_queenside = false; }
-                        if row == 0 && col == 7 { self.castling_rights.black_kingside = false; }
+                        if row == 7 && col == 0 {
+                            self.castling_rights.white_queenside = false;
+                        }
+                        if row == 7 && col == 7 {
+                            self.castling_rights.white_kingside = false;
+                        }
+                        if row == 0 && col == 0 {
+                            self.castling_rights.black_queenside = false;
+                        }
+                        if row == 0 && col == 7 {
+                            self.castling_rights.black_kingside = false;
+                        }
 
                         self.board[row][col] = Some(piece);
                         self.board[sel_row][sel_col] = None;
-                        
+
                         self.en_passant_target = next_en_passant_target;
                         self.turn = self.turn.opposite(); // Switch turns
                         self.selected_piece = None;
@@ -531,7 +548,13 @@ impl EventHandler for MyGame {
                 } else if let Some(piece) = self.board[row][col] {
                     if piece.color == self.turn {
                         self.selected_piece = Some((row, col)); // Select new piece
-                        self.legal_moves = get_legal_moves(&self.board, row, col, self.en_passant_target, self.castling_rights);
+                        self.legal_moves = get_legal_moves(
+                            &self.board,
+                            row,
+                            col,
+                            self.en_passant_target,
+                            self.castling_rights,
+                        );
                     } else {
                         self.flash_timer = 0.001; // Start flash effect for invalid move
                         self.selected_piece = None; // Deselect current piece
@@ -547,7 +570,13 @@ impl EventHandler for MyGame {
                     // Select piece
                     if p.color == self.turn {
                         self.selected_piece = Some((row, col));
-                        self.legal_moves = get_legal_moves(&self.board, row, col, self.en_passant_target, self.castling_rights);
+                        self.legal_moves = get_legal_moves(
+                            &self.board,
+                            row,
+                            col,
+                            self.en_passant_target,
+                            self.castling_rights,
+                        );
                     } else {
                         self.flash_timer = 0.001; // Start flash effect for invalid selection
                     }
