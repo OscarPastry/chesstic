@@ -377,8 +377,8 @@ fn main() {
         .window_setup(ggez::conf::WindowSetup::default().title("Chesstic"))
         .window_mode(ggez::conf::WindowMode::default().dimensions(800.0, 800.0))
         .build()
-        .expect("Failed to create context");
-    let my_game = MyGame::new(&mut ctx).expect("Failed to create game");
+        .expect("Jesus christ, how did you even manage to mess this up.");
+    let my_game = MyGame::new(&mut ctx).expect("Lmao, the computer says no.");
     event::run(ctx, event_loop, my_game);
 }
 #[derive(Clone, Copy)]
