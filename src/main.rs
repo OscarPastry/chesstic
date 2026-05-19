@@ -1,5 +1,5 @@
 use ggez::event::{self, EventHandler};
-use ggez::graphics::{self, Color, DrawParam, Mesh, MeshBuilder};
+use ggez::graphics::{self, Color, DrawParam, Mesh, MeshBuilder, Text};
 use ggez::{Context, ContextBuilder, GameResult};
 use std::collections::HashMap;
 
@@ -294,7 +294,7 @@ fn get_legal_moves(
 ) -> Vec<(usize, usize)> {
     let color = match board[row][col] {
         Some(p) => p.color,
-        none => return Vec::new(),
+        None => return Vec::new(),
     };
     get_pseudo_moves(board, row, col, en_passant_target, castling_rights)
         .into_iter()
@@ -314,6 +314,26 @@ fn get_legal_moves(
             !is_in_check(&temp_board, color)
         })
         .collect()
+}
+
+fn has_legal_moves(
+    board: &Board,
+    color: PieceColor,
+    en_passant_target: Option<(usize, usize)>,
+    castling_rights: CastlingRights,
+) -> bool {
+    for r in 0..8 {
+        for c in 0..8 {
+            if let Some(p) = board[r][c] {
+                if p.color == color {
+                    if !get_legal_moves(board, r, c, en_passant_target, castling_rights).is_empty() {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
 }
 
 fn load_svg_as_image(ctx: &mut Context, path: &str, size: u32) -> GameResult<graphics::Image> {
@@ -381,6 +401,13 @@ fn main() {
     let my_game = MyGame::new(&mut ctx).expect("Lmao, the computer says no.");
     event::run(ctx, event_loop, my_game);
 }
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GameStatus {
+    Playing,
+    Checkmate(PieceColor),
+    Stalemate,
+}
+
 #[derive(Clone, Copy)]
 struct CastlingRights {
     white_kingside: bool,
@@ -418,6 +445,7 @@ struct MyGame {
     flash_timer: f32,
     en_passant_target: Option<(usize, usize)>,
     castling_rights: CastlingRights,
+    status: GameStatus,
 }
 impl MyGame {
     pub fn new(ctx: &mut Context) -> GameResult<Self> {
@@ -438,6 +466,7 @@ impl MyGame {
             flash_timer: 0.0,
             en_passant_target: None,
             castling_rights: CastlingRights::new(),
+            status: GameStatus::Playing,
         })
     }
 }
@@ -449,7 +478,7 @@ impl EventHandler for MyGame {
         x: f32,
         y: f32,
     ) -> GameResult {
-        if button != event::MouseButton::Left || self.flash_timer > 0.0 {
+        if button != event::MouseButton::Left || self.flash_timer > 0.0 || self.status != GameStatus::Playing {
             return Ok(());
         }
         let col = (x / self.square_size) as usize;
@@ -544,6 +573,14 @@ impl EventHandler for MyGame {
                         self.turn = self.turn.opposite(); // Switch turns
                         self.selected_piece = None;
                         self.legal_moves.clear();
+
+                        if !has_legal_moves(&self.board, self.turn, self.en_passant_target, self.castling_rights) {
+                            if is_in_check(&self.board, self.turn) {
+                                self.status = GameStatus::Checkmate(self.turn.opposite());
+                            } else {
+                                self.status = GameStatus::Stalemate;
+                            }
+                        }
                     }
                 } else if let Some(piece) = self.board[row][col] {
                     if piece.color == self.turn {
@@ -652,6 +689,58 @@ impl EventHandler for MyGame {
                 }
             }
         }
+
+        match self.status {
+            GameStatus::Checkmate(winner) => {
+                let winner_str = match winner {
+                    PieceColor::White => "White",
+                    PieceColor::Black => "Black",
+                };
+                let mut text = Text::new(format!("Checkmate! {} wins!", winner_str));
+                text.set_scale(48.0);
+                let text_dim = text.measure(ctx)?;
+                let (win_w, win_h) = ctx.gfx.drawable_size();
+                
+                // Draw a semi-transparent background
+                let bg = Mesh::new_rectangle(
+                    ctx,
+                    graphics::DrawMode::fill(),
+                    graphics::Rect::new(0.0, win_h / 2.0 - 40.0, win_w, 80.0),
+                    Color::new(0.0, 0.0, 0.0, 0.7),
+                )?;
+                canvas.draw(&bg, DrawParam::default());
+                
+                canvas.draw(
+                    &text,
+                    DrawParam::default()
+                        .dest([win_w / 2.0 - text_dim.x / 2.0, win_h / 2.0 - text_dim.y / 2.0])
+                        .color(Color::new(1.0, 1.0, 1.0, 1.0)),
+                );
+            }
+            GameStatus::Stalemate => {
+                let mut text = Text::new("Stalemate! It's a draw.");
+                text.set_scale(48.0);
+                let text_dim = text.measure(ctx)?;
+                let (win_w, win_h) = ctx.gfx.drawable_size();
+                
+                let bg = Mesh::new_rectangle(
+                    ctx,
+                    graphics::DrawMode::fill(),
+                    graphics::Rect::new(0.0, win_h / 2.0 - 40.0, win_w, 80.0),
+                    Color::new(0.0, 0.0, 0.0, 0.7),
+                )?;
+                canvas.draw(&bg, DrawParam::default());
+                
+                canvas.draw(
+                    &text,
+                    DrawParam::default()
+                        .dest([win_w / 2.0 - text_dim.x / 2.0, win_h / 2.0 - text_dim.y / 2.0])
+                        .color(Color::new(1.0, 1.0, 1.0, 1.0)),
+                );
+            }
+            GameStatus::Playing => {}
+        }
+
         canvas.finish(ctx)
     }
 }
