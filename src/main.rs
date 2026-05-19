@@ -271,20 +271,8 @@ fn is_in_check(board: &Board, color: PieceColor) -> bool {
         }
     }
     //check if any opponent piece can move to the king's position
-    for r in 0..8 {
-        for c in 0..8 {
-            if let Some(p) = board[r][c] {
-                if p.color != color
-                    && get_pseudo_moves(board, r, c, None, CastlingRights::none()).contains(&king)
-                {
-                    return true;
-                }
-            }
-        }
-    }
-    false
+    is_attacked(board, king.0, king.1, color.opposite())
 }
-
 fn get_legal_moves(
     board: &Board,
     row: usize,
@@ -326,7 +314,8 @@ fn has_legal_moves(
         for c in 0..8 {
             if let Some(p) = board[r][c] {
                 if p.color == color {
-                    if !get_legal_moves(board, r, c, en_passant_target, castling_rights).is_empty() {
+                    if !get_legal_moves(board, r, c, en_passant_target, castling_rights).is_empty()
+                    {
                         return true;
                     }
                 }
@@ -478,7 +467,10 @@ impl EventHandler for MyGame {
         x: f32,
         y: f32,
     ) -> GameResult {
-        if button != event::MouseButton::Left || self.flash_timer > 0.0 || self.status != GameStatus::Playing {
+        if button != event::MouseButton::Left
+            || self.flash_timer > 0.0
+            || self.status != GameStatus::Playing
+        {
             return Ok(());
         }
         let col = (x / self.square_size) as usize;
@@ -574,7 +566,12 @@ impl EventHandler for MyGame {
                         self.selected_piece = None;
                         self.legal_moves.clear();
 
-                        if !has_legal_moves(&self.board, self.turn, self.en_passant_target, self.castling_rights) {
+                        if !has_legal_moves(
+                            &self.board,
+                            self.turn,
+                            self.en_passant_target,
+                            self.castling_rights,
+                        ) {
                             if is_in_check(&self.board, self.turn) {
                                 self.status = GameStatus::Checkmate(self.turn.opposite());
                             } else {
@@ -700,7 +697,7 @@ impl EventHandler for MyGame {
                 text.set_scale(48.0);
                 let text_dim = text.measure(ctx)?;
                 let (win_w, win_h) = ctx.gfx.drawable_size();
-                
+
                 // Draw a semi-transparent background
                 let bg = Mesh::new_rectangle(
                     ctx,
@@ -709,11 +706,14 @@ impl EventHandler for MyGame {
                     Color::new(0.0, 0.0, 0.0, 0.7),
                 )?;
                 canvas.draw(&bg, DrawParam::default());
-                
+
                 canvas.draw(
                     &text,
                     DrawParam::default()
-                        .dest([win_w / 2.0 - text_dim.x / 2.0, win_h / 2.0 - text_dim.y / 2.0])
+                        .dest([
+                            win_w / 2.0 - text_dim.x / 2.0,
+                            win_h / 2.0 - text_dim.y / 2.0,
+                        ])
                         .color(Color::new(1.0, 1.0, 1.0, 1.0)),
                 );
             }
@@ -722,7 +722,7 @@ impl EventHandler for MyGame {
                 text.set_scale(48.0);
                 let text_dim = text.measure(ctx)?;
                 let (win_w, win_h) = ctx.gfx.drawable_size();
-                
+
                 let bg = Mesh::new_rectangle(
                     ctx,
                     graphics::DrawMode::fill(),
@@ -730,11 +730,14 @@ impl EventHandler for MyGame {
                     Color::new(0.0, 0.0, 0.0, 0.7),
                 )?;
                 canvas.draw(&bg, DrawParam::default());
-                
+
                 canvas.draw(
                     &text,
                     DrawParam::default()
-                        .dest([win_w / 2.0 - text_dim.x / 2.0, win_h / 2.0 - text_dim.y / 2.0])
+                        .dest([
+                            win_w / 2.0 - text_dim.x / 2.0,
+                            win_h / 2.0 - text_dim.y / 2.0,
+                        ])
                         .color(Color::new(1.0, 1.0, 1.0, 1.0)),
                 );
             }
