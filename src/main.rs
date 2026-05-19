@@ -435,6 +435,9 @@ struct MyGame {
     en_passant_target: Option<(usize, usize)>,
     castling_rights: CastlingRights,
     status: GameStatus,
+    promotion_pending: Option<(usize, usize, usize, usize)>,
+    engine_eval: i32,
+    best_move_hint: Option<((usize, usize), (usize, usize))>,
 }
 impl MyGame {
     pub fn new(ctx: &mut Context) -> GameResult<Self> {
@@ -444,7 +447,7 @@ impl MyGame {
         let board_mesh = create_chessboard(ctx)?;
         let board = inital_board();
         let pieces = load_pieces(ctx, square_size as u32)?;
-        Ok(MyGame {
+        let mut game = MyGame {
             board_mesh,
             board,
             pieces,
@@ -456,7 +459,113 @@ impl MyGame {
             en_passant_target: None,
             castling_rights: CastlingRights::new(),
             status: GameStatus::Playing,
-        })
+            promotion_pending: None,
+            engine_eval: 0,
+            best_move_hint: None,
+        };
+        
+        let (best_move, eval) = find_best_move(&game.board, 3, game.turn, game.en_passant_target, game.castling_rights);
+        game.best_move_hint = best_move;
+        game.engine_eval = eval;
+        
+        Ok(game)
+    }
+    fn apply_move(
+        &mut self,
+        from: (usize, usize),
+        to: (usize, usize),
+        promote_to: Option<PieceType>,
+    ) {
+        let (sel_row, sel_col) = from;
+        let (row, col) = to;
+        if let Some(mut piece) = self.board[sel_row][sel_col] {
+            // Castling rook movement
+            if piece.kind == PieceType::King && (sel_col as i32 - col as i32).abs() == 2 {
+                if col == 6 {
+                    self.board[sel_row][5] = self.board[sel_row][7];
+                    self.board[sel_row][7] = None;
+                } else if col == 2 {
+                    self.board[sel_row][3] = self.board[sel_row][0];
+                    self.board[sel_row][0] = None;
+                }
+            }
+            //En passant capture
+            if piece.kind == PieceType::Pawn && sel_col != col && self.board[row][col].is_none() {
+                self.board[sel_row][col] = None;
+            }
+            //En passant target for next turn
+            let mut next_en_passant_target = None;
+            if piece.kind == PieceType::Pawn && (sel_row as i32 - row as i32).abs() == 2 {
+                next_en_passant_target = Some(((sel_row + row) / 2, col));
+            }
+            // Pawn promotion
+            if let Some(new_kind) = promote_to {
+                piece.kind = new_kind;
+            }
+            // Castling rights
+            if piece.kind == PieceType::King {
+                if piece.color == PieceColor::White {
+                    self.castling_rights.white_kingside = false;
+                    self.castling_rights.white_queenside = false;
+                } else {
+                    self.castling_rights.black_kingside = false;
+                    self.castling_rights.black_queenside = false;
+                }
+            }
+            if piece.kind == PieceType::Rook {
+                if piece.color == PieceColor::White {
+                    if sel_row == 7 && sel_col == 0 {
+                        self.castling_rights.white_queenside = false;
+                    } else if sel_row == 7 && sel_col == 7 {
+                        self.castling_rights.white_kingside = false;
+                    }
+                } else {
+                    if sel_row == 0 && sel_col == 0 {
+                        self.castling_rights.black_queenside = false;
+                    } else if sel_row == 0 && sel_col == 7 {
+                        self.castling_rights.black_kingside = false;
+                    }
+                }
+            }
+            // Also update castling rights if a rook is captured!
+            if row == 7 && col == 0 {
+                self.castling_rights.white_queenside = false;
+            }
+            if row == 7 && col == 7 {
+                self.castling_rights.white_kingside = false;
+            }
+            if row == 0 && col == 0 {
+                self.castling_rights.black_queenside = false;
+            }
+            if row == 0 && col == 7 {
+                self.castling_rights.black_kingside = false;
+            }
+
+            self.board[row][col] = Some(piece);
+            self.board[sel_row][sel_col] = None;
+
+            self.en_passant_target = next_en_passant_target;
+            self.turn = self.turn.opposite(); // Switch turns
+            self.selected_piece = None;
+            self.legal_moves.clear();
+
+            if !has_legal_moves(
+                &self.board,
+                self.turn,
+                self.en_passant_target,
+                self.castling_rights,
+            ) {
+                if is_in_check(&self.board, self.turn) {
+                    self.status = GameStatus::Checkmate(self.turn.opposite());
+                } else {
+                    self.status = GameStatus::Stalemate;
+                }
+            } else {
+                let (best_move, eval) = find_best_move(&self.board, 3, self.turn, self.en_passant_target, self.castling_rights);
+                self.best_move_hint = best_move;
+                self.engine_eval = eval;
+            }
+        }
     }
 }
 impl EventHandler for MyGame {
@@ -473,6 +582,31 @@ impl EventHandler for MyGame {
         {
             return Ok(());
         }
+
+        if let Some((from_row, from_col, to_row, to_col)) = self.promotion_pending {
+            let menu_x = from_col as f32 * self.square_size;
+            let menu_y = if to_row == 0 { 0.0 } else { 4.0 * self.square_size };
+            
+            if x >= menu_x && x < menu_x + self.square_size {
+                if y >= menu_y && y < menu_y + 4.0 * self.square_size {
+                    let index = ((y - menu_y) / self.square_size) as usize;
+                    let choices = [
+                        PieceType::Queen,
+                        PieceType::Rook,
+                        PieceType::Bishop,
+                        PieceType::Knight,
+                    ];
+                    if index < choices.len() {
+                        let promote_to = choices[index];
+                        self.promotion_pending = None;
+                        self.apply_move((from_row, from_col), (to_row, to_col), Some(promote_to));
+                    }
+                    return Ok(());
+                }
+            }
+            return Ok(()); // Ignore clicks outside the menu
+        }
+
         let col = (x / self.square_size) as usize;
         let row = (y / self.square_size) as usize;
 
@@ -485,98 +619,15 @@ impl EventHandler for MyGame {
                     self.selected_piece = None; // Deselect if clicked again
                     self.legal_moves.clear();
                 } else if self.legal_moves.contains(&(row, col)) {
-                    // Attempt to move piece
-                    if let Some(piece) = self.board[sel_row][sel_col] {
-                        let mut next_en_passant_target = None;
-
-                        // Handle castling rook movement
-                        if piece.kind == PieceType::King && (sel_col as i32 - col as i32).abs() == 2
-                        {
-                            if col == 6 {
-                                // Kingside
-                                self.board[sel_row][5] = self.board[sel_row][7];
-                                self.board[sel_row][7] = None;
-                            } else if col == 2 {
-                                // Queenside
-                                self.board[sel_row][3] = self.board[sel_row][0];
-                                self.board[sel_row][0] = None;
-                            }
-                        }
-
-                        // Handle en passant capture
-                        if piece.kind == PieceType::Pawn
-                            && sel_col != col
-                            && self.board[row][col].is_none()
-                        {
-                            // Pawn moved diagonally to an empty square - must be en passant
-                            self.board[sel_row][col] = None; // Remove captured pawn
-                        }
-
-                        // Set en passant target
-                        if piece.kind == PieceType::Pawn && (sel_row as i32 - row as i32).abs() == 2
-                        {
-                            let ep_row = (sel_row + row) / 2;
-                            next_en_passant_target = Some((ep_row, col));
-                        }
-
-                        // Update castling rights
-                        if piece.kind == PieceType::King {
-                            if piece.color == PieceColor::White {
-                                self.castling_rights.white_kingside = false;
-                                self.castling_rights.white_queenside = false;
-                            } else {
-                                self.castling_rights.black_kingside = false;
-                                self.castling_rights.black_queenside = false;
-                            }
-                        }
-                        if piece.kind == PieceType::Rook {
-                            if piece.color == PieceColor::White {
-                                if sel_row == 7 && sel_col == 0 {
-                                    self.castling_rights.white_queenside = false;
-                                } else if sel_row == 7 && sel_col == 7 {
-                                    self.castling_rights.white_kingside = false;
-                                }
-                            } else {
-                                if sel_row == 0 && sel_col == 0 {
-                                    self.castling_rights.black_queenside = false;
-                                } else if sel_row == 0 && sel_col == 7 {
-                                    self.castling_rights.black_kingside = false;
-                                }
-                            }
-                        }
-                        // Also update castling rights if a rook is captured!
-                        if row == 7 && col == 0 {
-                            self.castling_rights.white_queenside = false;
-                        }
-                        if row == 7 && col == 7 {
-                            self.castling_rights.white_kingside = false;
-                        }
-                        if row == 0 && col == 0 {
-                            self.castling_rights.black_queenside = false;
-                        }
-                        if row == 0 && col == 7 {
-                            self.castling_rights.black_kingside = false;
-                        }
-
-                        self.board[row][col] = Some(piece);
-                        self.board[sel_row][sel_col] = None;
-
-                        self.en_passant_target = next_en_passant_target;
-                        self.turn = self.turn.opposite(); // Switch turns
-                        self.selected_piece = None;
-                        self.legal_moves.clear();
-
-                        if !has_legal_moves(
-                            &self.board,
-                            self.turn,
-                            self.en_passant_target,
-                            self.castling_rights,
-                        ) {
-                            if is_in_check(&self.board, self.turn) {
-                                self.status = GameStatus::Checkmate(self.turn.opposite());
-                            } else {
-                                self.status = GameStatus::Stalemate;
-                            }
+                    if let Some(p) = self.board[sel_row][sel_col] {
+                        let promotion = if p.color == PieceColor::White { 0 } else { 7 };
+                        let is_promotion = p.kind == PieceType::Pawn && row == promotion;
+                        if is_promotion {
+                            self.promotion_pending = Some((sel_row, sel_col, row, col));
+                            self.selected_piece = None;
+                            self.legal_moves.clear();
+                        } else {
+                            self.apply_move((sel_row, sel_col), (row, col), None);
                         }
                     }
                 } else if let Some(piece) = self.board[row][col] {
@@ -743,6 +794,62 @@ impl EventHandler for MyGame {
             }
             GameStatus::Playing => {}
         }
+        if let Some((_, from_col, to_row, _)) = self.promotion_pending {
+            let color = self.turn;
+            let choices = [
+                PieceType::Queen,
+                PieceType::Rook,
+                PieceType::Bishop,
+                PieceType::Knight,
+            ];
+            let menu_x = from_col as f32 * self.square_size;
+            let menu_y = if to_row == 0 {
+                0.0
+            } else {
+                4.0 * self.square_size
+            };
+
+            for (i, &piece_type) in choices.iter().enumerate() {
+                let btn_y = menu_y + i as f32 * self.square_size;
+
+                let bg = Mesh::new_rectangle(
+                    ctx,
+                    graphics::DrawMode::fill(),
+                    graphics::Rect::new(menu_x, btn_y, self.square_size, self.square_size),
+                    Color::new(0.95, 0.85, 0.55, 1.0),
+                )?;
+                canvas.draw(&bg, DrawParam::default());
+
+                let key = (color as u8, piece_type as u8);
+                if let Some(image) = self.pieces.get(&key) {
+                    canvas.draw(image, DrawParam::default().dest([menu_x, btn_y]));
+                }
+            }
+        }
+
+        let (win_w, win_h) = ctx.gfx.drawable_size();
+        if win_w > 800.0 {
+            let sidebar = Mesh::new_rectangle(
+                ctx,
+                graphics::DrawMode::fill(),
+                graphics::Rect::new(800.0, 0.0, win_w - 800.0, win_h),
+                Color::new(0.15, 0.15, 0.15, 1.0),
+            )?;
+            canvas.draw(&sidebar, DrawParam::default());
+            
+            let mut eval_text = Text::new(format!("Eval: {:.2}", self.engine_eval as f32 / 100.0));
+            eval_text.set_scale(32.0);
+            canvas.draw(&eval_text, DrawParam::default().dest([820.0, 40.0]));
+            
+            if let Some((from, to)) = self.best_move_hint {
+                let files = ["a", "b", "c", "d", "e", "f", "g", "h"];
+                let rank_from = 8 - from.0;
+                let rank_to = 8 - to.0;
+                let mut best_text = Text::new(format!("Best Move:\n{}{}{} {}", files[from.1], rank_from, files[to.1], rank_to));
+                best_text.set_scale(24.0);
+                canvas.draw(&best_text, DrawParam::default().dest([820.0, 100.0]));
+            }
+        }
 
         canvas.finish(ctx)
     }
@@ -772,4 +879,192 @@ fn create_chessboard(ctx: &mut Context) -> GameResult<Mesh> {
         }
     }
     Ok(Mesh::from_data(ctx, mesh_builder.build()))
+}
+
+fn apply_move_pure(
+    mut board: Board,
+    from: (usize, usize),
+    to: (usize, usize),
+    mut castling_rights: CastlingRights,
+    promote_to: Option<PieceType>,
+) -> (Board, Option<(usize, usize)>, CastlingRights) {
+    let (sel_row, sel_col) = from;
+    let (row, col) = to;
+    if let Some(mut piece) = board[sel_row][sel_col] {
+        let mut next_en_passant_target = None;
+        if piece.kind == PieceType::King && (sel_col as i32 - col as i32).abs() == 2 {
+            if col == 6 {
+                board[sel_row][5] = board[sel_row][7];
+                board[sel_row][7] = None;
+            } else if col == 2 {
+                board[sel_row][3] = board[sel_row][0];
+                board[sel_row][0] = None;
+            }
+        }
+        if piece.kind == PieceType::Pawn && sel_col != col && board[row][col].is_none() {
+            board[sel_row][col] = None;
+        }
+        if piece.kind == PieceType::Pawn && (sel_row as i32 - row as i32).abs() == 2 {
+            next_en_passant_target = Some(((sel_row + row) / 2, col));
+        }
+        if let Some(new_kind) = promote_to {
+            piece.kind = new_kind;
+        }
+        if piece.kind == PieceType::King {
+            if piece.color == PieceColor::White {
+                castling_rights.white_kingside = false;
+                castling_rights.white_queenside = false;
+            } else {
+                castling_rights.black_kingside = false;
+                castling_rights.black_queenside = false;
+            }
+        }
+        if piece.kind == PieceType::Rook {
+            if piece.color == PieceColor::White {
+                if sel_row == 7 && sel_col == 0 { castling_rights.white_queenside = false; }
+                else if sel_row == 7 && sel_col == 7 { castling_rights.white_kingside = false; }
+            } else {
+                if sel_row == 0 && sel_col == 0 { castling_rights.black_queenside = false; }
+                else if sel_row == 0 && sel_col == 7 { castling_rights.black_kingside = false; }
+            }
+        }
+        let check_square = |r, c| -> bool { (sel_row == r && sel_col == c) || (row == r && col == c) };
+        if check_square(7, 0) { castling_rights.white_queenside = false; }
+        if check_square(7, 7) { castling_rights.white_kingside = false; }
+        if check_square(0, 0) { castling_rights.black_queenside = false; }
+        if check_square(0, 7) { castling_rights.black_kingside = false; }
+
+        board[row][col] = Some(piece);
+        board[sel_row][sel_col] = None;
+        return (board, next_en_passant_target, castling_rights);
+    }
+    (board, None, castling_rights)
+}
+
+fn evaluate(board: &Board) -> i32 {
+    let mut score = 0;
+    for r in 0..8 {
+        for c in 0..8 {
+            if let Some(p) = board[r][c] {
+                let val = match p.kind {
+                    PieceType::Pawn => 100,
+                    PieceType::Knight => 300,
+                    PieceType::Bishop => 300,
+                    PieceType::Rook => 500,
+                    PieceType::Queen => 900,
+                    PieceType::King => 10000,
+                };
+                if p.color == PieceColor::White {
+                    score += val;
+                } else {
+                    score -= val;
+                }
+            }
+        }
+    }
+    score
+}
+
+fn get_all_legal_moves(
+    board: &Board,
+    color: PieceColor,
+    ep_target: Option<(usize, usize)>,
+    castling: CastlingRights,
+) -> Vec<((usize, usize), (usize, usize), Option<PieceType>)> {
+    let mut moves = Vec::new();
+    for r in 0..8 {
+        for c in 0..8 {
+            if let Some(p) = board[r][c] {
+                if p.color == color {
+                    let piece_moves = get_legal_moves(board, r, c, ep_target, castling);
+                    for (nr, nc) in piece_moves {
+                        let promotion_row = if p.color == PieceColor::White { 0 } else { 7 };
+                        if p.kind == PieceType::Pawn && nr == promotion_row {
+                            moves.push(((r, c), (nr, nc), Some(PieceType::Queen)));
+                            moves.push(((r, c), (nr, nc), Some(PieceType::Knight)));
+                            moves.push(((r, c), (nr, nc), Some(PieceType::Rook)));
+                            moves.push(((r, c), (nr, nc), Some(PieceType::Bishop)));
+                        } else {
+                            moves.push(((r, c), (nr, nc), None));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    moves
+}
+
+fn minimax(
+    board: &Board,
+    depth: u8,
+    mut alpha: i32,
+    mut beta: i32,
+    maximizing_player: bool,
+    color: PieceColor,
+    ep_target: Option<(usize, usize)>,
+    castling: CastlingRights,
+) -> i32 {
+    if depth == 0 {
+        return evaluate(board);
+    }
+    let moves = get_all_legal_moves(board, color, ep_target, castling);
+    if moves.is_empty() {
+        if is_in_check(board, color) {
+            return if maximizing_player { -99999 } else { 99999 };
+        } else {
+            return 0; // Stalemate
+        }
+    }
+    if maximizing_player {
+        let mut max_eval = -100000;
+        for (from, to, promote) in moves {
+            let (new_board, new_ep, new_castling) = apply_move_pure(*board, from, to, castling, promote);
+            let eval = minimax(&new_board, depth - 1, alpha, beta, false, color.opposite(), new_ep, new_castling);
+            max_eval = max_eval.max(eval);
+            alpha = alpha.max(eval);
+            if beta <= alpha { break; }
+        }
+        max_eval
+    } else {
+        let mut min_eval = 100000;
+        for (from, to, promote) in moves {
+            let (new_board, new_ep, new_castling) = apply_move_pure(*board, from, to, castling, promote);
+            let eval = minimax(&new_board, depth - 1, alpha, beta, true, color.opposite(), new_ep, new_castling);
+            min_eval = min_eval.min(eval);
+            beta = beta.min(eval);
+            if beta <= alpha { break; }
+        }
+        min_eval
+    }
+}
+
+fn find_best_move(
+    board: &Board,
+    depth: u8,
+    color: PieceColor,
+    ep_target: Option<(usize, usize)>,
+    castling: CastlingRights,
+) -> (Option<((usize, usize), (usize, usize))>, i32) {
+    let moves = get_all_legal_moves(board, color, ep_target, castling);
+    let mut best_move = None;
+    let mut best_val = if color == PieceColor::White { -100000 } else { 100000 };
+    
+    for (from, to, promote) in moves {
+        let (new_board, new_ep, new_castling) = apply_move_pure(*board, from, to, castling, promote);
+        let eval = minimax(&new_board, depth - 1, -100000, 100000, color == PieceColor::Black, color.opposite(), new_ep, new_castling);
+        
+        if color == PieceColor::White {
+            if eval > best_val {
+                best_val = eval;
+                best_move = Some((from, to));
+            }
+        } else {
+            if eval < best_val {
+                best_val = eval;
+                best_move = Some((from, to));
+            }
+        }
+    }
+    (best_move, best_val)
 }
