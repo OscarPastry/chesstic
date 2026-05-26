@@ -25,6 +25,18 @@ enum PieceType {
     Queen,
     King,
 }
+impl PieceType {
+    fn value(self) -> i32 {
+        match self {
+            PieceType::Pawn => 100,
+            PieceType::Knight => 300,
+            PieceType::Bishop => 300,
+            PieceType::Rook => 500,
+            PieceType::Queen => 900,
+            PieceType::King => 20000,
+        }
+    }
+}
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct Piece {
     color: PieceColor,
@@ -670,14 +682,6 @@ impl CastlingRights {
             black_queenside: true,
         }
     }
-    fn none() -> Self {
-        CastlingRights {
-            white_kingside: false,
-            white_queenside: false,
-            black_kingside: false,
-            black_queenside: false,
-        }
-    }
 }
 
 struct MyGame {
@@ -1113,13 +1117,23 @@ impl EventHandler for MyGame {
             }
         }
 
-        match self.status {
-            GameStatus::Checkmate(winner) => {
-                let winner_str = match winner {
-                    PieceColor::White => "White",
-                    PieceColor::Black => "Black",
+        match &self.status {
+            GameStatus::Playing => {}
+            other_status => {
+                let text_str = match other_status {
+                    GameStatus::Checkmate(winner) => {
+                        let winner_str = match winner {
+                            PieceColor::White => "White",
+                            PieceColor::Black => "Black",
+                        };
+                        format!("Checkmate! {} wins!", winner_str)
+                    }
+                    GameStatus::Stalemate => "Stalemate! It's a draw.".to_string(),
+                    GameStatus::Draw(reason) => format!("Draw! {}", reason),
+                    _ => "".to_string(),
                 };
-                let mut text = Text::new(format!("Checkmate! {} wins!", winner_str));
+
+                let mut text = Text::new(text_str);
                 text.set_scale(48.0);
                 let text_dim = text.measure(ctx)?;
                 let (win_w, win_h) = ctx.gfx.drawable_size();
@@ -1143,55 +1157,6 @@ impl EventHandler for MyGame {
                         .color(Color::new(1.0, 1.0, 1.0, 1.0)),
                 );
             }
-            GameStatus::Draw(ref reason) => {
-                let mut text = Text::new(format!("Draw! {}", reason));
-                text.set_scale(48.0);
-                let text_dim = text.measure(ctx)?;
-                let (win_w, win_h) = ctx.gfx.drawable_size();
-
-                let bg = Mesh::new_rectangle(
-                    ctx,
-                    graphics::DrawMode::fill(),
-                    graphics::Rect::new(0.0, win_h / 2.0 - 40.0, win_w, 80.0),
-                    Color::new(0.0, 0.0, 0.0, 0.7),
-                )?;
-                canvas.draw(&bg, DrawParam::default());
-
-                canvas.draw(
-                    &text,
-                    DrawParam::default()
-                        .dest([
-                            win_w / 2.0 - text_dim.x / 2.0,
-                            win_h / 2.0 - text_dim.y / 2.0,
-                        ])
-                        .color(Color::new(1.0, 1.0, 1.0, 1.0)),
-                );
-            }
-            GameStatus::Stalemate => {
-                let mut text = Text::new("Stalemate! It's a draw.");
-                text.set_scale(48.0);
-                let text_dim = text.measure(ctx)?;
-                let (win_w, win_h) = ctx.gfx.drawable_size();
-
-                let bg = Mesh::new_rectangle(
-                    ctx,
-                    graphics::DrawMode::fill(),
-                    graphics::Rect::new(0.0, win_h / 2.0 - 40.0, win_w, 80.0),
-                    Color::new(0.0, 0.0, 0.0, 0.7),
-                )?;
-                canvas.draw(&bg, DrawParam::default());
-
-                canvas.draw(
-                    &text,
-                    DrawParam::default()
-                        .dest([
-                            win_w / 2.0 - text_dim.x / 2.0,
-                            win_h / 2.0 - text_dim.y / 2.0,
-                        ])
-                        .color(Color::new(1.0, 1.0, 1.0, 1.0)),
-                );
-            }
-            GameStatus::Playing => {}
         }
         if let Some((_, from_col, to_row, _)) = self.promotion_pending {
             let color = self.turn;
@@ -1381,16 +1346,8 @@ fn evaluate(board: &Board) -> i32 {
     for r in 0..8 {
         for c in 0..8 {
             if let Some(p) = board[r][c] {
-                let val = match p.kind {
-                    PieceType::Pawn => 100,
-                    PieceType::Knight => 300,
-                    PieceType::Bishop => 300,
-                    PieceType::Rook => 500,
-                    PieceType::Queen => 900,
-                    PieceType::King => 20000,
-                };
                 let positional = piece_square_value(p.kind, p.color, r, c);
-                let piece_score = val + positional;
+                let piece_score = p.kind.value() + positional;
                 if p.color == PieceColor::White {
                     score += piece_score;
                 } else {
@@ -1414,42 +1371,13 @@ fn move_score(
 
     // Reward captures based on piece value
     if let Some(victim) = board[to.0][to.1] {
-        let val = match victim.kind {
-            PieceType::Pawn => 100,
-            PieceType::Knight => 300,
-            PieceType::Bishop => 300,
-            PieceType::Rook => 500,
-            PieceType::Queen => 900,
-            PieceType::King => 20000,
-        };
-
-        let attacker_val = if let Some(att) = board[from.0][from.1] {
-            match att.kind {
-                PieceType::Pawn => 100,
-                PieceType::Knight => 300,
-                PieceType::Bishop => 300,
-                PieceType::Rook => 500,
-                PieceType::Queen => 900,
-                PieceType::King => 20000,
-            }
-        } else {
-            0
-        };
-
-        score += 10 * val - attacker_val;
+        let attacker_val = board[from.0][from.1].map_or(0, |att| att.kind.value());
+        score += 10 * victim.kind.value() - attacker_val;
     }
 
     // Reward promotions
     if let Some(promote_to) = promote {
-        let val = match promote_to {
-            PieceType::Queen => 900,
-            PieceType::Rook => 500,
-            PieceType::Bishop => 300,
-            PieceType::Knight => 300,
-            _ => 0,
-        };
-
-        score += val;
+        score += promote_to.value();
     }
 
     score
