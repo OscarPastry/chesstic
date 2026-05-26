@@ -25,7 +25,7 @@ enum PieceType {
     Queen,
     King,
 }
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct Piece {
     color: PieceColor,
     kind: PieceType,
@@ -499,6 +499,66 @@ fn get_legal_moves(
     }
 }
 
+fn is_insufficient_material(board: &Board) -> bool {
+    let mut white_pieces = 0;
+    let mut black_pieces = 0;
+    let mut white_knights = 0;
+    let mut black_knights = 0;
+    let mut white_bishops = 0;
+    let mut black_bishops = 0;
+
+    for r in 0..8 {
+        for c in 0..8 {
+            if let Some(p) = board[r][c] {
+                match p.color {
+                    PieceColor::White => {
+                        white_pieces += 1;
+                        match p.kind {
+                            PieceType::Knight => white_knights += 1,
+                            PieceType::Bishop => white_bishops += 1,
+                            PieceType::Pawn | PieceType::Rook | PieceType::Queen => return false,
+                            PieceType::King => {}
+                        }
+                    }
+                    PieceColor::Black => {
+                        black_pieces += 1;
+                        match p.kind {
+                            PieceType::Knight => black_knights += 1,
+                            PieceType::Bishop => black_bishops += 1,
+                            PieceType::Pawn | PieceType::Rook | PieceType::Queen => return false,
+                            PieceType::King => {}
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // K vs K
+    if white_pieces == 1 && black_pieces == 1 {
+        return true;
+    }
+
+    // K + N vs K or K + B vs K
+    if white_pieces == 2 && black_pieces == 1 {
+        if white_knights == 1 || white_bishops == 1 {
+            return true;
+        }
+    }
+    if white_pieces == 1 && black_pieces == 2 {
+        if black_knights == 1 || black_bishops == 1 {
+            return true;
+        }
+    }
+
+    // K + B vs K + B (Any colors for simplicity FIDE rules allow mate if on opposite colors, but many digital rules just say KB v KB is draw)
+    if white_pieces == 2 && black_pieces == 2 && white_bishops == 1 && black_bishops == 1 {
+        return true;
+    }
+
+    false
+}
+
 fn has_legal_moves(
     board: &Board,
     color: PieceColor,
@@ -586,14 +646,15 @@ fn main() {
     let my_game = MyGame::new(&mut ctx).expect("Lmao, the computer says no.");
     event::run(ctx, event_loop, my_game);
 }
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 enum GameStatus {
     Playing,
     Checkmate(PieceColor),
     Stalemate,
+    Draw(String),
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct CastlingRights {
     white_kingside: bool,
     white_queenside: bool,
@@ -634,6 +695,9 @@ struct MyGame {
     promotion_pending: Option<(usize, usize, usize, usize)>,
     engine_eval: i32,
     best_move_hint: Option<((usize, usize), (usize, usize))>,
+    board_flipped: bool,
+    halfmove_clock: u32,
+    position_history: HashMap<(Board, PieceColor, Option<(usize, usize)>, CastlingRights), u8>,
 }
 impl MyGame {
     pub fn new(ctx: &mut Context) -> GameResult<Self> {
@@ -658,7 +722,20 @@ impl MyGame {
             promotion_pending: None,
             engine_eval: 0,
             best_move_hint: None,
+            board_flipped: false,
+            halfmove_clock: 0,
+            position_history: HashMap::new(),
         };
+
+        game.position_history.insert(
+            (
+                game.board,
+                game.turn,
+                game.en_passant_target,
+                game.castling_rights,
+            ),
+            1,
+        );
 
         let (best_move, eval) = find_best_move(
             &game.board,
@@ -682,6 +759,16 @@ impl MyGame {
         let (sel_row, sel_col) = from;
         let (row, col) = to;
         if let Some(mut piece) = self.board[sel_row][sel_col] {
+            let is_pawn = piece.kind == PieceType::Pawn;
+            let is_capture = self.board[row][col].is_some()
+                || (is_pawn && sel_col != col && self.board[row][col].is_none());
+
+            if is_pawn || is_capture {
+                self.halfmove_clock = 0;
+            } else {
+                self.halfmove_clock += 1;
+            }
+
             // Castling rook movement
             if piece.kind == PieceType::King && (sel_col as i32 - col as i32).abs() == 2 {
                 if col == 6 {
@@ -752,6 +839,15 @@ impl MyGame {
             self.selected_piece = None;
             self.legal_moves.clear();
 
+            let state_key = (
+                self.board,
+                self.turn,
+                self.en_passant_target,
+                self.castling_rights,
+            );
+            let count = self.position_history.entry(state_key).or_insert(0);
+            *count += 1;
+
             if !has_legal_moves(
                 &self.board,
                 self.turn,
@@ -763,6 +859,12 @@ impl MyGame {
                 } else {
                     self.status = GameStatus::Stalemate;
                 }
+            } else if self.halfmove_clock >= 100 {
+                self.status = GameStatus::Draw("50-Move Rule".to_string());
+            } else if *count >= 3 {
+                self.status = GameStatus::Draw("Threefold Repetition".to_string());
+            } else if is_insufficient_material(&self.board) {
+                self.status = GameStatus::Draw("Insufficient Material".to_string());
             } else {
                 let (best_move, eval) = find_best_move(
                     &self.board,
@@ -785,10 +887,18 @@ impl EventHandler for MyGame {
         x: f32,
         y: f32,
     ) -> GameResult {
-        if button != event::MouseButton::Left
-            || self.flash_timer > 0.0
-            || self.status != GameStatus::Playing
-        {
+        if button != event::MouseButton::Left || self.flash_timer > 0.0 {
+            return Ok(());
+        }
+
+        // Check if rotate button clicked
+        let (win_w, _win_h) = _ctx.gfx.drawable_size();
+        if win_w > 800.0 && x >= 820.0 && x <= 980.0 && y >= 180.0 && y <= 220.0 {
+            self.board_flipped = !self.board_flipped;
+            return Ok(());
+        }
+
+        if self.status != GameStatus::Playing {
             return Ok(());
         }
 
@@ -820,11 +930,16 @@ impl EventHandler for MyGame {
             return Ok(()); // Ignore clicks outside the menu
         }
 
-        let col = (x / self.square_size) as usize;
-        let row = (y / self.square_size) as usize;
+        let mut col = (x / self.square_size) as usize;
+        let mut row = (y / self.square_size) as usize;
 
         if col >= 8 || row >= 8 {
             return Ok(());
+        }
+
+        if self.board_flipped {
+            col = 7 - col;
+            row = 7 - row;
         }
         match self.selected_piece {
             Some((sel_row, sel_col)) => {
@@ -901,26 +1016,47 @@ impl EventHandler for MyGame {
         canvas.draw(&self.board_mesh, DrawParam::default());
 
         if let Some((sel_row, sel_col)) = self.selected_piece {
-            let x = sel_col as f32 * self.square_size;
-            let y = sel_row as f32 * self.square_size;
+            let render_row = if self.board_flipped {
+                7 - sel_row
+            } else {
+                sel_row
+            };
+            let render_col = if self.board_flipped {
+                7 - sel_col
+            } else {
+                sel_col
+            };
             let highlight = Mesh::new_rectangle(
                 ctx,
                 graphics::DrawMode::fill(),
-                graphics::Rect::new(x, y, self.square_size, self.square_size),
-                Color::new(1.0, 1.0, 0.0, 0.4),
+                graphics::Rect::new(
+                    render_col as f32 * self.square_size,
+                    render_row as f32 * self.square_size,
+                    self.square_size,
+                    self.square_size,
+                ),
+                Color::new(1.0, 1.0, 0.0, 0.5),
             )?;
             canvas.draw(&highlight, DrawParam::default());
         }
-
-        //highlight best-move square with a subtle arrow-like tint
         if let Some((from, to)) = self.best_move_hint {
-            for (sq_row, sq_col) in [from, to] {
+            for &(sq_row, sq_col) in &[from, to] {
+                let render_row = if self.board_flipped {
+                    7 - sq_row
+                } else {
+                    sq_row
+                };
+                let render_col = if self.board_flipped {
+                    7 - sq_col
+                } else {
+                    sq_col
+                };
                 let hint = Mesh::new_rectangle(
                     ctx,
                     graphics::DrawMode::fill(),
                     graphics::Rect::new(
-                        sq_col as f32 * self.square_size,
-                        sq_row as f32 * self.square_size,
+                        render_col as f32 * self.square_size,
+                        render_row as f32 * self.square_size,
                         self.square_size,
                         self.square_size,
                     ),
@@ -930,12 +1066,14 @@ impl EventHandler for MyGame {
             }
         }
         for &(mr, mc) in &self.legal_moves {
+            let render_r = if self.board_flipped { 7 - mr } else { mr };
+            let render_c = if self.board_flipped { 7 - mc } else { mc };
             let dot = Mesh::new_circle(
                 ctx,
                 graphics::DrawMode::fill(),
                 [
-                    mc as f32 * self.square_size + self.square_size / 2.0,
-                    mr as f32 * self.square_size + self.square_size / 2.0,
+                    render_c as f32 * self.square_size + self.square_size / 2.0,
+                    render_r as f32 * self.square_size + self.square_size / 2.0,
                 ],
                 self.square_size * 0.15,
                 0.5,
@@ -965,8 +1103,10 @@ impl EventHandler for MyGame {
                 if let Some(piece) = self.board[row][col] {
                     let key = (piece.color as u8, piece.kind as u8);
                     if let Some(image) = self.pieces.get(&key) {
-                        let x = col as f32 * self.square_size;
-                        let y = row as f32 * self.square_size;
+                        let render_r = if self.board_flipped { 7 - row } else { row };
+                        let render_c = if self.board_flipped { 7 - col } else { col };
+                        let x = render_c as f32 * self.square_size;
+                        let y = render_r as f32 * self.square_size;
                         canvas.draw(image, DrawParam::default().dest([x, y]));
                     }
                 }
@@ -985,6 +1125,30 @@ impl EventHandler for MyGame {
                 let (win_w, win_h) = ctx.gfx.drawable_size();
 
                 // Draw a semi-transparent background
+                let bg = Mesh::new_rectangle(
+                    ctx,
+                    graphics::DrawMode::fill(),
+                    graphics::Rect::new(0.0, win_h / 2.0 - 40.0, win_w, 80.0),
+                    Color::new(0.0, 0.0, 0.0, 0.7),
+                )?;
+                canvas.draw(&bg, DrawParam::default());
+
+                canvas.draw(
+                    &text,
+                    DrawParam::default()
+                        .dest([
+                            win_w / 2.0 - text_dim.x / 2.0,
+                            win_h / 2.0 - text_dim.y / 2.0,
+                        ])
+                        .color(Color::new(1.0, 1.0, 1.0, 1.0)),
+                );
+            }
+            GameStatus::Draw(ref reason) => {
+                let mut text = Text::new(format!("Draw! {}", reason));
+                text.set_scale(48.0);
+                let text_dim = text.measure(ctx)?;
+                let (win_w, win_h) = ctx.gfx.drawable_size();
+
                 let bg = Mesh::new_rectangle(
                     ctx,
                     graphics::DrawMode::fill(),
@@ -1087,6 +1251,22 @@ impl EventHandler for MyGame {
                 best_text.set_scale(24.0);
                 canvas.draw(&best_text, DrawParam::default().dest([820.0, 100.0]));
             }
+
+            let rotate_btn_y = 180.0;
+            let rotate_bg = Mesh::new_rectangle(
+                ctx,
+                graphics::DrawMode::fill(),
+                graphics::Rect::new(820.0, rotate_btn_y, 160.0, 40.0),
+                Color::new(0.25, 0.25, 0.25, 1.0),
+            )?;
+            canvas.draw(&rotate_bg, DrawParam::default());
+
+            let mut rotate_text = Text::new("Rotate Board");
+            rotate_text.set_scale(20.0);
+            canvas.draw(
+                &rotate_text,
+                DrawParam::default().dest([835.0, rotate_btn_y + 10.0]),
+            );
         }
 
         canvas.finish(ctx)
