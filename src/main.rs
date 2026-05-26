@@ -1,6 +1,5 @@
 use ggez::event::{self, EventHandler};
 use ggez::graphics::{self, Color, DrawParam, Mesh, MeshBuilder, Text};
-use ggez::input::keyboard::KeyCode::MediaSelect;
 use ggez::{Context, ContextBuilder, GameResult};
 use std::collections::HashMap;
 
