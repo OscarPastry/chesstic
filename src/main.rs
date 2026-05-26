@@ -146,8 +146,8 @@ fn slide(
     col: usize,
     color: PieceColor,
     dir: &[(i32, i32)],
-) -> Vec<(usize, usize)> {
-    let mut moves = Vec::new();
+    moves: &mut Vec<(usize, usize)>,
+) {
     for (dr, dc) in dir {
         let mut r = row as i32 + dr;
         let mut c = col as i32 + dc;
@@ -164,7 +164,6 @@ fn slide(
             c += dc;
         }
     }
-    moves
 }
 
 fn get_pseudo_moves(
@@ -173,13 +172,13 @@ fn get_pseudo_moves(
     col: usize,
     en_passant_target: Option<(usize, usize)>,
     castling_rights: CastlingRights,
-) -> Vec<(usize, usize)> {
+    moves: &mut Vec<(usize, usize)>,
+) {
     let piece = match board[row][col] {
         Some(p) => p,
-        None => return Vec::new(),
+        None => return,
     };
     let color = piece.color;
-    let mut moves = Vec::new();
 
     // nr = next row, nc = next col
     match piece.kind {
@@ -235,25 +234,27 @@ fn get_pseudo_moves(
             }
         }
         PieceType::Bishop => {
-            moves.extend(slide(
+            slide(
                 board,
                 row,
                 col,
                 color,
                 &[(-1, -1), (-1, 1), (1, -1), (1, 1)],
-            ));
+                moves,
+            );
         }
         PieceType::Rook => {
-            moves.extend(slide(
+            slide(
                 board,
                 row,
                 col,
                 color,
                 &[(-1, 0), (1, 0), (0, -1), (0, 1)],
-            ));
+                moves,
+            );
         }
         PieceType::Queen => {
-            moves.extend(slide(
+            slide(
                 board,
                 row,
                 col,
@@ -268,7 +269,8 @@ fn get_pseudo_moves(
                     (0, -1),
                     (0, 1),
                 ],
-            ));
+                moves,
+            );
         }
         PieceType::King => {
             for dr in -1i32..=1 {
@@ -321,21 +323,98 @@ fn get_pseudo_moves(
             }
         }
     }
-    moves
 }
 fn is_attacked(board: &Board, row: usize, col: usize, by_color: PieceColor) -> bool {
-    for r in 0..8 {
-        for c in 0..8 {
-            if let Some(p) = board[r][c] {
-                if p.color == by_color
-                    && get_pseudo_moves(board, r, c, None, CastlingRights::none())
-                        .contains(&(row, col))
-                {
+    // Check for pawns
+    let pawn_dir = if by_color == PieceColor::White { 1 } else { -1 };
+    let pawn_row = row as i32 + pawn_dir;
+    if pawn_row >= 0 && pawn_row < 8 {
+        for dc in [-1i32, 1] {
+            let nc = col as i32 + dc;
+            if nc >= 0 && nc < 8 {
+                if let Some(p) = board[pawn_row as usize][nc as usize] {
+                    if p.color == by_color && p.kind == PieceType::Pawn {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+
+    // Check for knights
+    for (dr, dc) in [
+        (-2, -1i32),
+        (-2, 1),
+        (-1, 2),
+        (-1, -2),
+        (1, 2),
+        (1, -2),
+        (2, 1),
+        (2, -1),
+    ] {
+        let r = row as i32 + dr;
+        let c = col as i32 + dc;
+        if r >= 0 && r < 8 && c >= 0 && c < 8 {
+            if let Some(p) = board[r as usize][c as usize] {
+                if p.color == by_color && p.kind == PieceType::Knight {
                     return true;
                 }
             }
         }
     }
+
+    // Check for kings
+    for dr in -1i32..=1 {
+        for dc in -1i32..=1 {
+            if dr == 0 && dc == 0 {
+                continue;
+            }
+            let r = row as i32 + dr;
+            let c = col as i32 + dc;
+            if r >= 0 && r < 8 && c >= 0 && c < 8 {
+                if let Some(p) = board[r as usize][c as usize] {
+                    if p.color == by_color && p.kind == PieceType::King {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+
+    // Check for sliding pieces
+    for (dr, dc) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+        let mut r = row as i32 + dr;
+        let mut c = col as i32 + dc;
+        while r >= 0 && r < 8 && c >= 0 && c < 8 {
+            if let Some(p) = board[r as usize][c as usize] {
+                if p.color == by_color && (p.kind == PieceType::Rook || p.kind == PieceType::Queen)
+                {
+                    return true;
+                }
+                break;
+            }
+            r += dr;
+            c += dc;
+        }
+    }
+
+    for (dr, dc) in [(-1, -1), (-1, 1), (1, -1), (1, 1)] {
+        let mut r = row as i32 + dr;
+        let mut c = col as i32 + dc;
+        while r >= 0 && r < 8 && c >= 0 && c < 8 {
+            if let Some(p) = board[r as usize][c as usize] {
+                if p.color == by_color
+                    && (p.kind == PieceType::Bishop || p.kind == PieceType::Queen)
+                {
+                    return true;
+                }
+                break;
+            }
+            r += dr;
+            c += dc;
+        }
+    }
+
     false
 }
 fn is_in_check(board: &Board, color: PieceColor) -> bool {
@@ -360,29 +439,64 @@ fn get_legal_moves(
     col: usize,
     en_passant_target: Option<(usize, usize)>,
     castling_rights: CastlingRights,
-) -> Vec<(usize, usize)> {
+    legal_moves: &mut Vec<(usize, usize)>,
+) {
     let color = match board[row][col] {
         Some(p) => p.color,
-        None => return Vec::new(),
+        None => return,
     };
-    get_pseudo_moves(board, row, col, en_passant_target, castling_rights)
-        .into_iter()
-        .filter(|&(nr, nc)| {
-            let mut temp_board = *board;
-            temp_board[nr][nc] = temp_board[row][col];
-            temp_board[row][col] = None;
 
-            // If en passant capture, remove the captured pawn
-            if let Some(piece) = temp_board[nr][nc] {
-                if piece.kind == PieceType::Pawn && nc != col && board[nr][nc].is_none() {
-                    temp_board[row][nc] = None;
+    let is_king = board[row][col].map_or(false, |p| p.kind == PieceType::King);
+
+    // Find the king once if we're not moving it
+    let mut king_pos = (0, 0);
+    if !is_king {
+        'find: for r in 0..8 {
+            for c in 0..8 {
+                if let Some(p) = board[r][c] {
+                    if p.color == color && p.kind == PieceType::King {
+                        king_pos = (r, c);
+                        break 'find;
+                    }
                 }
             }
+        }
+    }
 
-            //Keep the moves only if King is not in check after it
-            !is_in_check(&temp_board, color)
-        })
-        .collect()
+    let mut pseudo_moves = Vec::with_capacity(32);
+    get_pseudo_moves(
+        board,
+        row,
+        col,
+        en_passant_target,
+        castling_rights,
+        &mut pseudo_moves,
+    );
+
+    for (nr, nc) in pseudo_moves {
+        let mut temp_board = *board;
+        temp_board[nr][nc] = temp_board[row][col];
+        temp_board[row][col] = None;
+
+        // If en passant capture, remove the captured pawn
+        if let Some(piece) = temp_board[nr][nc] {
+            if piece.kind == PieceType::Pawn && nc != col && board[nr][nc].is_none() {
+                temp_board[row][nc] = None;
+            }
+        }
+
+        let current_king_pos = if is_king { (nr, nc) } else { king_pos };
+
+        // Keep the moves only if King is not in check after it
+        if !is_attacked(
+            &temp_board,
+            current_king_pos.0,
+            current_king_pos.1,
+            color.opposite(),
+        ) {
+            legal_moves.push((nr, nc));
+        }
+    }
 }
 
 fn has_legal_moves(
@@ -391,12 +505,13 @@ fn has_legal_moves(
     en_passant_target: Option<(usize, usize)>,
     castling_rights: CastlingRights,
 ) -> bool {
+    let mut moves = Vec::new();
     for r in 0..8 {
         for c in 0..8 {
             if let Some(p) = board[r][c] {
                 if p.color == color {
-                    if !get_legal_moves(board, r, c, en_passant_target, castling_rights).is_empty()
-                    {
+                    get_legal_moves(board, r, c, en_passant_target, castling_rights, &mut moves);
+                    if !moves.is_empty() {
                         return true;
                     }
                 }
@@ -731,12 +846,14 @@ impl EventHandler for MyGame {
                 } else if let Some(piece) = self.board[row][col] {
                     if piece.color == self.turn {
                         self.selected_piece = Some((row, col)); // Select new piece
-                        self.legal_moves = get_legal_moves(
+                        self.legal_moves.clear();
+                        get_legal_moves(
                             &self.board,
                             row,
                             col,
                             self.en_passant_target,
                             self.castling_rights,
+                            &mut self.legal_moves,
                         );
                     } else {
                         self.flash_timer = 0.001; // Start flash effect for invalid move
@@ -753,12 +870,14 @@ impl EventHandler for MyGame {
                     // Select piece
                     if p.color == self.turn {
                         self.selected_piece = Some((row, col));
-                        self.legal_moves = get_legal_moves(
+                        self.legal_moves.clear();
+                        get_legal_moves(
                             &self.board,
                             row,
                             col,
                             self.en_passant_target,
                             self.castling_rights,
+                            &mut self.legal_moves,
                         );
                     } else {
                         self.flash_timer = 0.001; // Start flash effect for invalid selection
@@ -1162,13 +1281,15 @@ fn get_all_legal_moves(
     ep_target: Option<(usize, usize)>,
     castling: CastlingRights,
 ) -> Vec<((usize, usize), (usize, usize), Option<PieceType>)> {
-    let mut moves = Vec::new();
+    let mut moves = Vec::with_capacity(64);
+    let mut piece_moves = Vec::with_capacity(32);
     for r in 0..8 {
         for c in 0..8 {
             if let Some(p) = board[r][c] {
                 if p.color == color {
-                    let piece_moves = get_legal_moves(board, r, c, ep_target, castling);
-                    for (nr, nc) in piece_moves {
+                    piece_moves.clear();
+                    get_legal_moves(board, r, c, ep_target, castling, &mut piece_moves);
+                    for &(nr, nc) in &piece_moves {
                         let promotion_row = if p.color == PieceColor::White { 0 } else { 7 };
                         if p.kind == PieceType::Pawn && nr == promotion_row {
                             moves.push(((r, c), (nr, nc), Some(PieceType::Queen)));
@@ -1177,6 +1298,82 @@ fn get_all_legal_moves(
                             moves.push(((r, c), (nr, nc), Some(PieceType::Bishop)));
                         } else {
                             moves.push(((r, c), (nr, nc), None));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    moves.sort_by_key(|&(from, to, promote)| -move_score(board, from, to, promote));
+    moves
+}
+
+fn get_all_legal_captures(
+    board: &Board,
+    color: PieceColor,
+    ep_target: Option<(usize, usize)>,
+    castling: CastlingRights,
+) -> Vec<((usize, usize), (usize, usize), Option<PieceType>)> {
+    let mut moves = Vec::with_capacity(16);
+    let mut piece_moves = Vec::with_capacity(32);
+
+    // Find king position once per color
+    let mut king_pos = (0, 0);
+    'find: for r in 0..8 {
+        for c in 0..8 {
+            if let Some(p) = board[r][c] {
+                if p.color == color && p.kind == PieceType::King {
+                    king_pos = (r, c);
+                    break 'find;
+                }
+            }
+        }
+    }
+
+    for r in 0..8 {
+        for c in 0..8 {
+            if let Some(p) = board[r][c] {
+                if p.color == color {
+                    piece_moves.clear();
+                    get_pseudo_moves(board, r, c, ep_target, castling, &mut piece_moves);
+                    for &(nr, nc) in &piece_moves {
+                        let is_capture = board[nr][nc].is_some()
+                            || (p.kind == PieceType::Pawn && ep_target == Some((nr, nc)));
+                        let is_promotion = p.kind == PieceType::Pawn && (nr == 0 || nr == 7);
+                        if !is_capture && !is_promotion {
+                            continue;
+                        }
+
+                        let mut temp_board = *board;
+                        temp_board[nr][nc] = temp_board[r][c];
+                        temp_board[r][c] = None;
+
+                        if let Some(piece) = temp_board[nr][nc] {
+                            if piece.kind == PieceType::Pawn && nc != c && board[nr][nc].is_none() {
+                                temp_board[r][nc] = None;
+                            }
+                        }
+
+                        let current_king_pos = if p.kind == PieceType::King {
+                            (nr, nc)
+                        } else {
+                            king_pos
+                        };
+
+                        if !is_attacked(
+                            &temp_board,
+                            current_king_pos.0,
+                            current_king_pos.1,
+                            color.opposite(),
+                        ) {
+                            if is_promotion {
+                                moves.push(((r, c), (nr, nc), Some(PieceType::Queen)));
+                                moves.push(((r, c), (nr, nc), Some(PieceType::Knight)));
+                                moves.push(((r, c), (nr, nc), Some(PieceType::Rook)));
+                                moves.push(((r, c), (nr, nc), Some(PieceType::Bishop)));
+                            } else {
+                                moves.push(((r, c), (nr, nc), None));
+                            }
                         }
                     }
                 }
@@ -1290,11 +1487,7 @@ fn quiescence(
     }
 
     // Only search captures
-    let all_moves = get_all_legal_moves(board, color, ep_target, castling);
-    let captures: Vec<_> = all_moves
-        .into_iter()
-        .filter(|&(_, to, promote)| board[to.0][to.1].is_some() || promote.is_some())
-        .collect();
+    let captures = get_all_legal_captures(board, color, ep_target, castling);
 
     if maximizing_player {
         let mut max_eval = stand_pat;
