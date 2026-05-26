@@ -1,5 +1,6 @@
 use ggez::event::{self, EventHandler};
 use ggez::graphics::{self, Color, DrawParam, Mesh, MeshBuilder, Text};
+use ggez::input::keyboard::KeyCode::MediaSelect;
 use ggez::{Context, ContextBuilder, GameResult};
 use std::collections::HashMap;
 
@@ -32,6 +33,87 @@ struct Piece {
 }
 type Board = [[Option<Piece>; 8]; 8];
 
+const PAWN_TABLE: [[i32; 8]; 8] = [
+    [0, 0, 0, 0, 0, 0, 0, 0],
+    [50, 50, 50, 50, 50, 50, 50, 50],
+    [10, 10, 20, 30, 30, 20, 10, 10],
+    [5, 5, 10, 25, 25, 10, 5, 5],
+    [0, 0, 0, 20, 20, 0, 0, 0],
+    [5, -5, -10, 0, 0, -10, -5, 5],
+    [5, 10, 10, -20, -20, 10, 10, 5],
+    [0, 0, 0, 0, 0, 0, 0, 0],
+];
+
+const KNIGHT_TABLE: [[i32; 8]; 8] = [
+    [-50, -40, -30, -30, -30, -30, -40, -50],
+    [-40, -20, 0, 0, 0, 0, -20, -40],
+    [-30, 0, 10, 15, 15, 10, 0, -30],
+    [-30, 5, 15, 20, 20, 15, 5, -30],
+    [-30, 0, 15, 20, 20, 15, 0, -30],
+    [-30, 5, 10, 15, 15, 10, 5, -30],
+    [-40, -20, 0, 5, 5, 0, -20, -40],
+    [-50, -40, -30, -30, -30, -30, -40, -50],
+];
+
+const BISHOP_TABLE: [[i32; 8]; 8] = [
+    [-20, -10, -10, -10, -10, -10, -10, -20],
+    [-10, 0, 0, 0, 0, 0, 0, -10],
+    [-10, 0, 5, 10, 10, 5, 0, -10],
+    [-10, 5, 5, 10, 10, 5, 5, -10],
+    [-10, 0, 10, 10, 10, 10, 0, -10],
+    [-10, 10, 10, 10, 10, 10, 10, -10],
+    [-10, 5, 0, 0, 0, 0, 5, -10],
+    [-20, -10, -10, -10, -10, -10, -10, -20],
+];
+
+const ROOK_TABLE: [[i32; 8]; 8] = [
+    [0, 0, 0, 5, 5, 0, 0, 0],
+    [-5, 0, 0, 0, 0, 0, 0, -5],
+    [-5, 0, 0, 0, 0, 0, 0, -5],
+    [-5, 0, 0, 0, 0, 0, 0, -5],
+    [-5, 0, 0, 0, 0, 0, 0, -5],
+    [-5, 0, 0, 0, 0, 0, 0, -5],
+    [5, 10, 10, 10, 10, 10, 10, 5],
+    [0, 0, 0, 5, 5, 0, 0, 0],
+];
+
+const QUEEN_TABLE: [[i32; 8]; 8] = [
+    [-20, -10, -10, -5, -5, -10, -10, -20],
+    [-10, 0, 0, 0, 0, 0, 0, -10],
+    [-10, 0, 5, 5, 5, 5, 0, -10],
+    [-5, 0, 5, 5, 5, 5, 0, -5],
+    [0, 0, 5, 5, 5, 5, 0, -5],
+    [-10, 0, 5, 5, 5, 5, 0, -10],
+    [-10, 0, 0, 0, 0, 0, 0, -10],
+    [-20, -10, -10, -5, -5, -10, -10, -20],
+];
+
+const KING_TABLE: [[i32; 8]; 8] = [
+    [-30, -40, -40, -50, -50, -40, -40, -30],
+    [-30, -40, -40, -50, -50, -40, -40, -30],
+    [-30, -40, -40, -50, -50, -40, -40, -30],
+    [-30, -40, -40, -50, -50, -40, -40, -30],
+    [-20, -30, -30, -40, -40, -30, -30, -20],
+    [-10, -20, -20, -20, -20, -20, -20, -10],
+    [20, 20, 0, 0, 0, 0, 20, 20],
+    [20, 30, 10, 0, 0, 10, 30, 20],
+];
+
+fn piece_square_value(kind: PieceType, color: PieceColor, row: usize, col: usize) -> i32 {
+    let r = if color == PieceColor::White {
+        row
+    } else {
+        7 - row
+    };
+    match kind {
+        PieceType::Pawn => PAWN_TABLE[r][col],
+        PieceType::Knight => KNIGHT_TABLE[r][col],
+        PieceType::Bishop => BISHOP_TABLE[r][col],
+        PieceType::Rook => ROOK_TABLE[r][col],
+        PieceType::Queen => QUEEN_TABLE[r][col],
+        PieceType::King => KING_TABLE[r][col],
+    }
+}
 fn inital_board() -> Board {
     use PieceColor::*;
     use PieceType::*;
@@ -463,13 +545,20 @@ impl MyGame {
             engine_eval: 0,
             best_move_hint: None,
         };
-        
-        let (best_move, eval) = find_best_move(&game.board, 3, game.turn, game.en_passant_target, game.castling_rights);
+
+        let (best_move, eval) = find_best_move(
+            &game.board,
+            5,
+            game.turn,
+            game.en_passant_target,
+            game.castling_rights,
+        );
         game.best_move_hint = best_move;
         game.engine_eval = eval;
-        
+
         Ok(game)
     }
+
     fn apply_move(
         &mut self,
         from: (usize, usize),
@@ -561,7 +650,13 @@ impl MyGame {
                     self.status = GameStatus::Stalemate;
                 }
             } else {
-                let (best_move, eval) = find_best_move(&self.board, 3, self.turn, self.en_passant_target, self.castling_rights);
+                let (best_move, eval) = find_best_move(
+                    &self.board,
+                    3,
+                    self.turn,
+                    self.en_passant_target,
+                    self.castling_rights,
+                );
                 self.best_move_hint = best_move;
                 self.engine_eval = eval;
             }
@@ -585,8 +680,12 @@ impl EventHandler for MyGame {
 
         if let Some((from_row, from_col, to_row, to_col)) = self.promotion_pending {
             let menu_x = from_col as f32 * self.square_size;
-            let menu_y = if to_row == 0 { 0.0 } else { 4.0 * self.square_size };
-            
+            let menu_y = if to_row == 0 {
+                0.0
+            } else {
+                4.0 * self.square_size
+            };
+
             if x >= menu_x && x < menu_x + self.square_size {
                 if y >= menu_y && y < menu_y + 4.0 * self.square_size {
                     let index = ((y - menu_y) / self.square_size) as usize;
@@ -693,6 +792,24 @@ impl EventHandler for MyGame {
                 Color::new(1.0, 1.0, 0.0, 0.4),
             )?;
             canvas.draw(&highlight, DrawParam::default());
+        }
+
+        //highlight best-move square with a subtle arrow-like tint
+        if let Some((from, to)) = self.best_move_hint {
+            for (sq_row, sq_col) in [from, to] {
+                let hint = Mesh::new_rectangle(
+                    ctx,
+                    graphics::DrawMode::fill(),
+                    graphics::Rect::new(
+                        sq_col as f32 * self.square_size,
+                        sq_row as f32 * self.square_size,
+                        self.square_size,
+                        self.square_size,
+                    ),
+                    Color::new(0.0, 0.6, 1.0, 0.25),
+                )?;
+                canvas.draw(&hint, DrawParam::default());
+            }
         }
         for &(mr, mc) in &self.legal_moves {
             let dot = Mesh::new_circle(
@@ -836,16 +953,19 @@ impl EventHandler for MyGame {
                 Color::new(0.15, 0.15, 0.15, 1.0),
             )?;
             canvas.draw(&sidebar, DrawParam::default());
-            
+
             let mut eval_text = Text::new(format!("Eval: {:.2}", self.engine_eval as f32 / 100.0));
             eval_text.set_scale(32.0);
             canvas.draw(&eval_text, DrawParam::default().dest([820.0, 40.0]));
-            
+
             if let Some((from, to)) = self.best_move_hint {
                 let files = ["a", "b", "c", "d", "e", "f", "g", "h"];
                 let rank_from = 8 - from.0;
                 let rank_to = 8 - to.0;
-                let mut best_text = Text::new(format!("Best Move:\n{}{}{} {}", files[from.1], rank_from, files[to.1], rank_to));
+                let mut best_text = Text::new(format!(
+                    "Best Move:\n{}{}{} {}",
+                    files[from.1], rank_from, files[to.1], rank_to
+                ));
                 best_text.set_scale(24.0);
                 canvas.draw(&best_text, DrawParam::default().dest([820.0, 100.0]));
             }
@@ -921,18 +1041,33 @@ fn apply_move_pure(
         }
         if piece.kind == PieceType::Rook {
             if piece.color == PieceColor::White {
-                if sel_row == 7 && sel_col == 0 { castling_rights.white_queenside = false; }
-                else if sel_row == 7 && sel_col == 7 { castling_rights.white_kingside = false; }
+                if sel_row == 7 && sel_col == 0 {
+                    castling_rights.white_queenside = false;
+                } else if sel_row == 7 && sel_col == 7 {
+                    castling_rights.white_kingside = false;
+                }
             } else {
-                if sel_row == 0 && sel_col == 0 { castling_rights.black_queenside = false; }
-                else if sel_row == 0 && sel_col == 7 { castling_rights.black_kingside = false; }
+                if sel_row == 0 && sel_col == 0 {
+                    castling_rights.black_queenside = false;
+                } else if sel_row == 0 && sel_col == 7 {
+                    castling_rights.black_kingside = false;
+                }
             }
         }
-        let check_square = |r, c| -> bool { (sel_row == r && sel_col == c) || (row == r && col == c) };
-        if check_square(7, 0) { castling_rights.white_queenside = false; }
-        if check_square(7, 7) { castling_rights.white_kingside = false; }
-        if check_square(0, 0) { castling_rights.black_queenside = false; }
-        if check_square(0, 7) { castling_rights.black_kingside = false; }
+        let check_square =
+            |r, c| -> bool { (sel_row == r && sel_col == c) || (row == r && col == c) };
+        if check_square(7, 0) {
+            castling_rights.white_queenside = false;
+        }
+        if check_square(7, 7) {
+            castling_rights.white_kingside = false;
+        }
+        if check_square(0, 0) {
+            castling_rights.black_queenside = false;
+        }
+        if check_square(0, 7) {
+            castling_rights.black_kingside = false;
+        }
 
         board[row][col] = Some(piece);
         board[sel_row][sel_col] = None;
@@ -940,6 +1075,8 @@ fn apply_move_pure(
     }
     (board, None, castling_rights)
 }
+
+//--- Engine logic below---------
 
 fn evaluate(board: &Board) -> i32 {
     let mut score = 0;
@@ -952,16 +1089,71 @@ fn evaluate(board: &Board) -> i32 {
                     PieceType::Bishop => 300,
                     PieceType::Rook => 500,
                     PieceType::Queen => 900,
-                    PieceType::King => 10000,
+                    PieceType::King => 20000,
                 };
+                let positional = piece_square_value(p.kind, p.color, r, c);
+                let piece_score = val + positional;
                 if p.color == PieceColor::White {
-                    score += val;
+                    score += piece_score;
                 } else {
-                    score -= val;
+                    score -= piece_score;
                 }
             }
         }
     }
+    score
+}
+
+//---- Move generation with ordering ----
+
+fn move_score(
+    board: &Board,
+    from: (usize, usize),
+    to: (usize, usize),
+    promote: Option<PieceType>,
+) -> i32 {
+    let mut score = 0i32;
+
+    // Reward captures based on piece value
+    if let Some(victim) = board[to.0][to.1] {
+        let val = match victim.kind {
+            PieceType::Pawn => 100,
+            PieceType::Knight => 300,
+            PieceType::Bishop => 300,
+            PieceType::Rook => 500,
+            PieceType::Queen => 900,
+            PieceType::King => 20000,
+        };
+
+        let attacker_val = if let Some(att) = board[from.0][from.1] {
+            match att.kind {
+                PieceType::Pawn => 100,
+                PieceType::Knight => 300,
+                PieceType::Bishop => 300,
+                PieceType::Rook => 500,
+                PieceType::Queen => 900,
+                PieceType::King => 20000,
+            }
+        } else {
+            0
+        };
+
+        score += 10 * val - attacker_val;
+    }
+
+    // Reward promotions
+    if let Some(promote_to) = promote {
+        let val = match promote_to {
+            PieceType::Queen => 900,
+            PieceType::Rook => 500,
+            PieceType::Bishop => 300,
+            PieceType::Knight => 300,
+            _ => 0,
+        };
+
+        score += val;
+    }
+
     score
 }
 
@@ -992,8 +1184,11 @@ fn get_all_legal_moves(
             }
         }
     }
+    moves.sort_by_key(|&(from, to, promote)| -move_score(board, from, to, promote));
     moves
 }
+
+//--- Minimax with alpha-beta pruning ---
 
 fn minimax(
     board: &Board,
@@ -1006,34 +1201,142 @@ fn minimax(
     castling: CastlingRights,
 ) -> i32 {
     if depth == 0 {
-        return evaluate(board);
+        return quiescence(
+            board,
+            alpha,
+            beta,
+            maximizing_player,
+            color,
+            ep_target,
+            castling,
+        );
     }
     let moves = get_all_legal_moves(board, color, ep_target, castling);
     if moves.is_empty() {
         if is_in_check(board, color) {
             return if maximizing_player { -99999 } else { 99999 };
         } else {
-            return 0; // Stalemate
-        }
+            0 // Stalemate
+        };
     }
     if maximizing_player {
         let mut max_eval = -100000;
         for (from, to, promote) in moves {
-            let (new_board, new_ep, new_castling) = apply_move_pure(*board, from, to, castling, promote);
-            let eval = minimax(&new_board, depth - 1, alpha, beta, false, color.opposite(), new_ep, new_castling);
+            let (new_board, new_ep, new_castling) =
+                apply_move_pure(*board, from, to, castling, promote);
+            let eval = minimax(
+                &new_board,
+                depth - 1,
+                alpha,
+                beta,
+                false,
+                color.opposite(),
+                new_ep,
+                new_castling,
+            );
             max_eval = max_eval.max(eval);
             alpha = alpha.max(eval);
-            if beta <= alpha { break; }
+            if beta <= alpha {
+                break;
+            }
         }
         max_eval
     } else {
         let mut min_eval = 100000;
         for (from, to, promote) in moves {
-            let (new_board, new_ep, new_castling) = apply_move_pure(*board, from, to, castling, promote);
-            let eval = minimax(&new_board, depth - 1, alpha, beta, true, color.opposite(), new_ep, new_castling);
+            let (new_board, new_ep, new_castling) =
+                apply_move_pure(*board, from, to, castling, promote);
+            let eval = minimax(
+                &new_board,
+                depth - 1,
+                alpha,
+                beta,
+                true,
+                color.opposite(),
+                new_ep,
+                new_castling,
+            );
             min_eval = min_eval.min(eval);
             beta = beta.min(eval);
-            if beta <= alpha { break; }
+            if beta <= alpha {
+                break;
+            }
+        }
+        min_eval
+    }
+}
+// --- Quiescence search to reduce horizon effect ---
+
+fn quiescence(
+    board: &Board,
+    mut alpha: i32,
+    mut beta: i32,
+    maximizing_player: bool,
+    color: PieceColor,
+    ep_target: Option<(usize, usize)>,
+    castling: CastlingRights,
+) -> i32 {
+    let stand_pat = evaluate(board);
+
+    if maximizing_player {
+        if stand_pat >= beta {
+            return beta;
+        }
+        alpha = alpha.max(stand_pat);
+    } else {
+        if stand_pat <= alpha {
+            return alpha;
+        }
+        beta = beta.min(stand_pat);
+    }
+
+    // Only search captures
+    let all_moves = get_all_legal_moves(board, color, ep_target, castling);
+    let captures: Vec<_> = all_moves
+        .into_iter()
+        .filter(|&(_, to, promote)| board[to.0][to.1].is_some() || promote.is_some())
+        .collect();
+
+    if maximizing_player {
+        let mut max_eval = stand_pat;
+        for (from, to, promote) in captures {
+            let (new_board, new_ep, new_castling) =
+                apply_move_pure(*board, from, to, castling, promote);
+            let eval = quiescence(
+                &new_board,
+                alpha,
+                beta,
+                false,
+                color.opposite(),
+                new_ep,
+                new_castling,
+            );
+            max_eval = max_eval.max(eval);
+            alpha = alpha.max(eval);
+            if beta <= alpha {
+                break;
+            }
+        }
+        max_eval
+    } else {
+        let mut min_eval = stand_pat;
+        for (from, to, promote) in captures {
+            let (new_board, new_ep, new_castling) =
+                apply_move_pure(*board, from, to, castling, promote);
+            let eval = quiescence(
+                &new_board,
+                alpha,
+                beta,
+                true,
+                color.opposite(),
+                new_ep,
+                new_castling,
+            );
+            min_eval = min_eval.min(eval);
+            beta = beta.min(eval);
+            if beta <= alpha {
+                break;
+            }
         }
         min_eval
     }
@@ -1048,12 +1351,26 @@ fn find_best_move(
 ) -> (Option<((usize, usize), (usize, usize))>, i32) {
     let moves = get_all_legal_moves(board, color, ep_target, castling);
     let mut best_move = None;
-    let mut best_val = if color == PieceColor::White { -100000 } else { 100000 };
-    
+    let mut best_val = if color == PieceColor::White {
+        -100000
+    } else {
+        100000
+    };
+
     for (from, to, promote) in moves {
-        let (new_board, new_ep, new_castling) = apply_move_pure(*board, from, to, castling, promote);
-        let eval = minimax(&new_board, depth - 1, -100000, 100000, color == PieceColor::Black, color.opposite(), new_ep, new_castling);
-        
+        let (new_board, new_ep, new_castling) =
+            apply_move_pure(*board, from, to, castling, promote);
+        let eval = minimax(
+            &new_board,
+            depth - 1,
+            -100000,
+            100000,
+            color == PieceColor::Black,
+            color.opposite(),
+            new_ep,
+            new_castling,
+        );
+
         if color == PieceColor::White {
             if eval > best_val {
                 best_val = eval;
