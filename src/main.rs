@@ -684,6 +684,18 @@ impl CastlingRights {
     }
 }
 
+#[derive(Clone)]
+struct GameStateSnapshot {
+    board: Board,
+    turn: PieceColor,
+    en_passant_target: Option<(usize, usize)>,
+    castling_rights: CastlingRights,
+    halfmove_clock: u32,
+    status: GameStatus,
+    engine_eval: i32,
+    best_move_hint: Option<((usize, usize), (usize, usize))>,
+}
+
 struct MyGame {
     board_mesh: Mesh,
     board: Board,
@@ -702,6 +714,7 @@ struct MyGame {
     board_flipped: bool,
     halfmove_clock: u32,
     position_history: HashMap<(Board, PieceColor, Option<(usize, usize)>, CastlingRights), u8>,
+    history_stack: Vec<GameStateSnapshot>,
 }
 impl MyGame {
     pub fn new(ctx: &mut Context) -> GameResult<Self> {
@@ -729,6 +742,7 @@ impl MyGame {
             board_flipped: false,
             halfmove_clock: 0,
             position_history: HashMap::new(),
+            history_stack: Vec::new(),
         };
 
         game.position_history.insert(
@@ -754,6 +768,72 @@ impl MyGame {
         Ok(game)
     }
 
+    pub fn reset_game(&mut self) {
+        self.board = inital_board();
+        self.selected_piece = None;
+        self.turn = PieceColor::White;
+        self.legal_moves.clear();
+        self.flash_timer = 0.0;
+        self.en_passant_target = None;
+        self.castling_rights = CastlingRights::new();
+        self.status = GameStatus::Playing;
+        self.promotion_pending = None;
+        self.engine_eval = 0;
+        self.best_move_hint = None;
+        self.halfmove_clock = 0;
+        self.position_history.clear();
+        self.history_stack.clear();
+
+        self.position_history.insert(
+            (
+                self.board,
+                self.turn,
+                self.en_passant_target,
+                self.castling_rights,
+            ),
+            1,
+        );
+
+        let (best_move, eval) = find_best_move(
+            &self.board,
+            3,
+            self.turn,
+            self.en_passant_target,
+            self.castling_rights,
+        );
+        self.best_move_hint = best_move;
+        self.engine_eval = eval;
+    }
+
+    pub fn undo_move(&mut self) {
+        if let Some(snapshot) = self.history_stack.pop() {
+            // Remove the current state from history before reverting
+            let current_state_key = (
+                self.board,
+                self.turn,
+                self.en_passant_target,
+                self.castling_rights,
+            );
+            if let Some(count) = self.position_history.get_mut(&current_state_key) {
+                *count = count.saturating_sub(1);
+            }
+
+            self.board = snapshot.board;
+            self.turn = snapshot.turn;
+            self.en_passant_target = snapshot.en_passant_target;
+            self.castling_rights = snapshot.castling_rights;
+            self.halfmove_clock = snapshot.halfmove_clock;
+            self.status = snapshot.status;
+            self.engine_eval = snapshot.engine_eval;
+            self.best_move_hint = snapshot.best_move_hint;
+
+            self.selected_piece = None;
+            self.legal_moves.clear();
+            self.promotion_pending = None;
+            self.flash_timer = 0.0;
+        }
+    }
+
     fn apply_move(
         &mut self,
         from: (usize, usize),
@@ -762,7 +842,20 @@ impl MyGame {
     ) {
         let (sel_row, sel_col) = from;
         let (row, col) = to;
+
         if let Some(mut piece) = self.board[sel_row][sel_col] {
+            // Snapshot current state for undo
+            self.history_stack.push(GameStateSnapshot {
+                board: self.board,
+                turn: self.turn,
+                en_passant_target: self.en_passant_target,
+                castling_rights: self.castling_rights,
+                halfmove_clock: self.halfmove_clock,
+                status: self.status.clone(),
+                engine_eval: self.engine_eval,
+                best_move_hint: self.best_move_hint,
+            });
+
             let is_pawn = piece.kind == PieceType::Pawn;
             let is_capture = self.board[row][col].is_some()
                 || (is_pawn && sel_col != col && self.board[row][col].is_none());
@@ -895,11 +988,21 @@ impl EventHandler for MyGame {
             return Ok(());
         }
 
-        // Check if rotate button clicked
+        // UI Button clicks in the sidebar
         let (win_w, _win_h) = _ctx.gfx.drawable_size();
-        if win_w > 800.0 && x >= 820.0 && x <= 980.0 && y >= 180.0 && y <= 220.0 {
-            self.board_flipped = !self.board_flipped;
-            return Ok(());
+        if win_w > 800.0 && x >= 820.0 && x <= 980.0 {
+            if y >= 180.0 && y <= 220.0 {
+                self.board_flipped = !self.board_flipped;
+                return Ok(());
+            } else if y >= 240.0 && y <= 280.0 {
+                if !self.history_stack.is_empty() {
+                    self.undo_move();
+                }
+                return Ok(());
+            } else if y >= 300.0 && y <= 340.0 {
+                self.reset_game();
+                return Ok(());
+            }
         }
 
         if self.status != GameStatus::Playing {
@@ -1231,6 +1334,48 @@ impl EventHandler for MyGame {
             canvas.draw(
                 &rotate_text,
                 DrawParam::default().dest([835.0, rotate_btn_y + 10.0]),
+            );
+
+            let undo_btn_y = 240.0;
+            let undo_bg = Mesh::new_rectangle(
+                ctx,
+                graphics::DrawMode::fill(),
+                graphics::Rect::new(820.0, undo_btn_y, 160.0, 40.0),
+                if self.history_stack.is_empty() {
+                    Color::new(0.15, 0.15, 0.15, 1.0)
+                } else {
+                    Color::new(0.25, 0.25, 0.25, 1.0)
+                },
+            )?;
+            canvas.draw(&undo_bg, DrawParam::default());
+
+            let mut undo_text = Text::new("Undo Move");
+            undo_text.set_scale(20.0);
+            canvas.draw(
+                &undo_text,
+                DrawParam::default().dest([845.0, undo_btn_y + 10.0]).color(
+                    if self.history_stack.is_empty() {
+                        Color::new(0.5, 0.5, 0.5, 1.0)
+                    } else {
+                        Color::new(1.0, 1.0, 1.0, 1.0)
+                    },
+                ),
+            );
+
+            let reset_btn_y = 300.0;
+            let reset_bg = Mesh::new_rectangle(
+                ctx,
+                graphics::DrawMode::fill(),
+                graphics::Rect::new(820.0, reset_btn_y, 160.0, 40.0),
+                Color::new(0.5, 0.15, 0.15, 1.0),
+            )?;
+            canvas.draw(&reset_bg, DrawParam::default());
+
+            let mut reset_text = Text::new("Reset Game");
+            reset_text.set_scale(20.0);
+            canvas.draw(
+                &reset_text,
+                DrawParam::default().dest([845.0, reset_btn_y + 10.0]),
             );
         }
 
