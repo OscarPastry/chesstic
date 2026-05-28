@@ -38,8 +38,8 @@ Since `ggez` relies on system graphics APIs, make sure you have standard graphic
 
 1. Clone the repository:
 ```bash
-git clone <your-repo-url>
-cd chess
+git clone https://github.com/OscarPastry/chesstic
+cd chesstic
 ```
 
 2. Run the game:
